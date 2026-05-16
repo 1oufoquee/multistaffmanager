@@ -23,17 +23,19 @@ def get_db():
     return _db
 
 
+def _users_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Users")
+
+
 def is_authorized_user(telegram_id: int) -> bool:
     db = get_db()
-    users_ref = db.collection("staff_users")
-    query = users_ref.where("telegramId", "==", telegram_id).limit(1).get()
+    query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
     return len(query) > 0
 
 
 def get_user_info(telegram_id: int) -> dict | None:
     db = get_db()
-    users_ref = db.collection("staff_users")
-    query = users_ref.where("telegramId", "==", telegram_id).limit(1).get()
+    query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
     if query:
         return query[0].to_dict()
     return None
@@ -54,9 +56,7 @@ def get_orders() -> list[dict]:
 
 def get_all_staff() -> list[dict]:
     db = get_db()
-    # Path: atmosfera (collection) → Users (document with subcollection or direct collection)
-    ref = db.collection("atmosfera").document("Users").collection("Users")
-    docs = ref.get()
+    docs = _users_ref(db).get()
     results = []
     for doc in docs:
         data = doc.to_dict()
