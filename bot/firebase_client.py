@@ -54,7 +54,8 @@ def get_orders() -> list[dict]:
 
 def get_all_staff() -> list[dict]:
     db = get_db()
-    ref = db.collection("staff_users")
+    # Path: atmosfera (collection) → Users (document with subcollection or direct collection)
+    ref = db.collection("atmosfera").document("Users").collection("Users")
     docs = ref.get()
     results = []
     for doc in docs:
