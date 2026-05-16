@@ -1,45 +1,75 @@
-# [Project name]
+# Cinema Staff Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Telegram bot for cinema staff to manage active orders, view sales statistics, and record write-offs. Access is restricted to users whose Telegram ID is stored in Firebase Firestore.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `python main.py` — run the Telegram bot
+- Bot workflow: "Cinema Staff Bot" (configured in Replit workflows)
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- python-telegram-bot 20.7 (async polling)
+- firebase-admin 6.4.0 (Firestore)
+- pnpm workspaces, Node.js 24, TypeScript 5.9 (existing API server)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `main.py` — bot entry point, registers all handlers
+- `bot/firebase_client.py` — Firebase/Firestore client (auth checks, data queries)
+- `bot/handlers/start.py` — /start command, authorization gate
+- `bot/handlers/orders.py` — /orders command, shows active orders
+- `bot/handlers/stats.py` — /stats command, shows sales statistics
+- `bot/handlers/writeoffs.py` — /writeoffs and /addwriteoff (multi-step conversation)
+- `bot/utils.py` — shared helpers (timestamp formatting)
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Access control is enforced in every handler by checking `telegramId` against the `staff_users` Firestore collection.
+- Firebase client is lazily initialized (singleton pattern) to avoid repeated credential parsing.
+- Write-offs use a ConversationHandler to guide staff through a 4-step flow (item → qty → unit → reason).
+- All Firestore field names follow camelCase to match the existing Firebase schema convention.
+- The bot uses long-polling (not webhooks) so no public URL or extra server config is needed.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Staff can:
+1. **Check active orders** — see all orders with `status == "active"` from Firestore, with customer name, seat/hall, items and total.
+2. **View statistics** — total orders, active/completed/cancelled counts, and total revenue from completed orders.
+3. **View recent write-offs** — last 30 write-offs with item, quantity, reason, and staff name.
+4. **Record a write-off** — guided 4-step conversation to log item name, quantity, unit, and reason.
+
+## Firebase Firestore Schema Expected
+
+### `staff_users` collection
+```
+{ telegramId: number, name: string }
+```
+
+### `orders` collection
+```
+{ status: "active"|"completed"|"cancelled", customerName: string, hall: string, items: array, total: number, createdAt: timestamp }
+```
+
+### `writeoffs` collection
+```
+{ itemName: string, quantity: number, unit: string, reason: string, staffName: string, createdAt: timestamp }
+```
+
+## Required Secrets
+
+- `TELEGRAM_BOT_TOKEN` — from @BotFather on Telegram
+- `FIREBASE_SERVICE_ACCOUNT_JSON` — Firebase service account JSON (full content)
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Python for the bot
+- Firebase Firestore as database
+- Access control via telegramId stored in Firebase
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- The `staff_users` collection must have documents with a `telegramId` field (integer) matching the user's Telegram ID. Without this, all users are denied access.
+- Field names in Firestore queries (`status`, `createdAt`, `telegramId`) must match exactly what's in your Firebase collections.
+- If your Firestore collection names differ (e.g. `orders` → `cinema_orders`), update the collection names in `bot/firebase_client.py`.
