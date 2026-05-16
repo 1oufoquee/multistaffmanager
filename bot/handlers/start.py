@@ -1,6 +1,14 @@
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from bot.firebase_client import is_authorized_user, get_user_info
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
+        [KeyboardButton("📊 Статистика")],
+    ],
+    resize_keyboard=True,
+)
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -9,9 +17,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized_user(telegram_id):
         await update.message.reply_text(
-            "Access denied. Your Telegram ID is not registered in the system.\n\n"
-            f"Your Telegram ID: `{telegram_id}`\n"
-            "Please contact your administrator.",
+            "Доступ заборонено. Ваш Telegram ID не зареєстровано в системі.\n\n"
+            f"Ваш Telegram ID: `{telegram_id}`\n"
+            "Зверніться до адміністратора.",
             parse_mode="Markdown"
         )
         return
@@ -20,13 +28,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = info.get("name", user.first_name) if info else user.first_name
 
     await update.message.reply_text(
-        f"Welcome, *{name}*!\n\n"
-        "You have access to the cinema staff panel.\n\n"
-        "Available commands:\n"
-        "/orders — Active orders\n"
-        "/stats — Sales statistics\n"
-        "/writeoffs — View recent write-offs\n"
-        "/addwriteoff — Record a new write-off\n"
-        "/help — Show this menu",
-        parse_mode="Markdown"
+        f"Вітаємо, *{name}*\\!\n\n"
+        "Оберіть розділ за допомогою кнопок нижче:",
+        parse_mode="MarkdownV2",
+        reply_markup=MAIN_KEYBOARD,
     )

@@ -1,63 +1,62 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.firebase_client import is_authorized_user, get_active_orders
-from bot.utils import format_timestamp
+from bot.firebase_client import is_authorized_user, get_orders
+from bot.utils import format_timestamp, format_items
 
 
 async def orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
     if not is_authorized_user(telegram_id):
-        await update.message.reply_text("Access denied.")
+        await update.message.reply_text("Доступ заборонено.")
         return
 
-    await update.message.reply_text("Fetching active orders...")
+    await update.message.reply_text("Завантаження замовлень...")
 
     try:
-        orders = get_active_orders()
+        orders = get_orders()
     except Exception as e:
-        await update.message.reply_text(f"Error fetching orders: {e}")
+        await update.message.reply_text(f"Помилка завантаження: {e}")
         return
 
     if not orders:
-        await update.message.reply_text("No active orders at the moment.")
+        await update.message.reply_text("Замовлень не знайдено.")
         return
 
-    lines = [f"*Active Orders ({len(orders)})*\n"]
+    lines = [f"*📦 Замовлення ({len(orders)})*\n"]
     for i, order in enumerate(orders, 1):
-        order_id = order.get("id", "N/A")
-        customer = order.get("customerName", order.get("customer", "—"))
-        items = order.get("items", [])
-        total = order.get("total", order.get("totalAmount", 0))
-        hall = order.get("hall", order.get("seatNumber", "—"))
+        seat_id = order.get("seatId", "—")
+        status = order.get("status", "—")
+        total = order.get("total", 0)
+        user_id = order.get("userId", "—")
         created = format_timestamp(order.get("createdAt"))
-
-        items_str = ""
-        if isinstance(items, list):
-            item_names = []
-            for it in items:
-                if isinstance(it, dict):
-                    n = it.get("name", it.get("title", ""))
-                    q = it.get("quantity", it.get("qty", 1))
-                    item_names.append(f"{n} x{q}" if n else str(it))
-                else:
-                    item_names.append(str(it))
-            items_str = ", ".join(item_names) if item_names else "—"
-        elif isinstance(items, str):
-            items_str = items
-        else:
-            items_str = "—"
+        items_str = format_items(order.get("items", []))
 
         lines.append(
-            f"*{i}. Order #{order_id[:8]}*\n"
-            f"  Customer: {customer}\n"
-            f"  Hall/Seat: {hall}\n"
-            f"  Items: {items_str}\n"
-            f"  Total: {total} UAH\n"
-            f"  Created: {created}\n"
+            f"*{i}. Місце:* {seat_id}\n"
+            f"  Статус: {status}\n"
+            f"  Позиції: {items_str}\n"
+            f"  Сума: {total} грн\n"
+            f"  Клієнт: {user_id}\n"
+            f"  Час: {created}\n"
         )
 
     text = "\n".join(lines)
-    if len(text) > 4000:
-        text = text[:4000] + "\n...(truncated)"
+    # Split into chunks if too long
+    chunks = _split_text(text, 4000)
+    for chunk in chunks:
+        await update.message.reply_text(chunk, parse_mode="Markdown")
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+def _split_text(text: str, max_len: int) -> list[str]:
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    while len(text) > max_len:
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    if text:
+        chunks.append(text)
+    return chunks

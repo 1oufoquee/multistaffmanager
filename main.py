@@ -3,10 +3,10 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
-from bot.handlers.start import start_handler
+from bot.handlers.start import start_handler, MAIN_KEYBOARD
 from bot.handlers.orders import orders_handler
 from bot.handlers.stats import stats_handler
-from bot.handlers.writeoffs import writeoffs_handler, build_addwriteoff_conversation
+from bot.handlers.staff import staff_handler
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -18,19 +18,29 @@ logger = logging.getLogger(__name__)
 async def help_handler(update, context):
     await update.message.reply_text(
         "*Cinema Staff Bot*\n\n"
-        "Available commands:\n"
-        "/orders — View active orders\n"
-        "/stats — Sales statistics\n"
-        "/writeoffs — View recent write-offs\n"
-        "/addwriteoff — Record a new write-off\n"
-        "/help — Show this menu",
-        parse_mode="Markdown"
+        "Оберіть розділ за допомогою кнопок нижче або команд:\n"
+        "/orders — Замовлення\n"
+        "/staff — Працівники\n"
+        "/stats — Статистика",
+        parse_mode="Markdown",
+        reply_markup=MAIN_KEYBOARD,
     )
+
+
+async def keyboard_router(update: Update, context):
+    text = update.message.text
+    if text == "📦 Замовлення":
+        await orders_handler(update, context)
+    elif text == "👥 Працівники":
+        await staff_handler(update, context)
+    elif text == "📊 Статистика":
+        await stats_handler(update, context)
 
 
 async def unknown_handler(update, context):
     await update.message.reply_text(
-        "Unknown command. Use /help to see available commands."
+        "Невідома команда. Скористайтесь кнопками меню або /help.",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
@@ -44,9 +54,15 @@ def main():
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("orders", orders_handler))
+    app.add_handler(CommandHandler("staff", staff_handler))
     app.add_handler(CommandHandler("stats", stats_handler))
-    app.add_handler(CommandHandler("writeoffs", writeoffs_handler))
-    app.add_handler(build_addwriteoff_conversation())
+
+    # Reply keyboard button handler
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        keyboard_router,
+    ))
+
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
 
     logger.info("Cinema Staff Bot is starting...")
