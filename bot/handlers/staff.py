@@ -23,11 +23,16 @@ async def staff_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"*👥 Працівники ({len(staff)})*\n"]
     for i, member in enumerate(staff, 1):
-        name = member.get("name", "—")
-        tid = member.get("telegramId", "—")
+        app_user_id = member.get("_id", "—")
+        name = member.get("name", member.get("displayName", member.get("email", "—")))
+        telegram_id = member.get("telegramId", "—")
         role = member.get("role", member.get("position", ""))
         role_str = f" · {role}" if role else ""
-        lines.append(f"{i}. *{name}*{role_str}\n   Telegram ID: `{tid}`")
+        lines.append(
+            f"{i}. *{name}*{role_str}\n"
+            f"   App ID: `{app_user_id}`\n"
+            f"   Telegram ID: `{telegram_id}`"
+        )
 
     text = "\n".join(lines)
     await update.message.reply_text(text, parse_mode="Markdown")
