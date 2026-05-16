@@ -27,6 +27,10 @@ def _users_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Users")
 
 
+def _orders_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Orders").document("Orders").collection("Orders")
+
+
 def is_authorized_user(telegram_id: int) -> bool:
     db = get_db()
     query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
@@ -43,9 +47,7 @@ def get_user_info(telegram_id: int) -> dict | None:
 
 def get_orders() -> list[dict]:
     db = get_db()
-    # Path: atmosfera (collection) → Orders (document) → Orders (subcollection)
-    orders_ref = db.collection("atmosfera").document("Orders").collection("Orders")
-    query = orders_ref.order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).get()
+    query = _orders_ref(db).order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).get()
     results = []
     for doc in query:
         data = doc.to_dict()
@@ -67,8 +69,7 @@ def get_all_staff() -> list[dict]:
 
 def get_statistics() -> dict:
     db = get_db()
-    orders_ref = db.collection("atmosfera").document("Orders").collection("Orders")
-    all_orders = orders_ref.get()
+    all_orders = _orders_ref(db).get()
 
     total_orders = 0
     total_revenue = 0.0
