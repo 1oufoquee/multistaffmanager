@@ -19,10 +19,9 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         "*📊 Статистика*\n\n"
-        f"Всього замовлень: *{stats['total_orders']}*\n\n"
+        f"📦 Всього замовлень: *{stats['total_orders']}*\n\n"
         f"🟢 Активні: *{stats['active']}*\n"
-        f"✅ Виконані: *{stats['completed']}*\n"
-        f"❌ Скасовані: *{stats['cancelled']}*\n\n"
+        f"✅ Закриті: *{stats['completed']}*\n\n"
         f"💰 Виручка: *{stats['total_revenue']:.2f} грн*"
     )
 

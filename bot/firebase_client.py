@@ -74,7 +74,6 @@ def get_statistics() -> dict:
     total_orders = 0
     total_revenue = 0.0
     completed = 0
-    cancelled = 0
     active = 0
 
     for doc in all_orders:
@@ -83,16 +82,13 @@ def get_statistics() -> dict:
         status = data.get("status", "unknown")
         if status == "active":
             active += 1
-        elif status == "completed":
+        elif status == "closed":
             completed += 1
             total_revenue += float(data.get("total", 0) or 0)
-        elif status == "cancelled":
-            cancelled += 1
 
     return {
         "total_orders": total_orders,
         "active": active,
         "completed": completed,
-        "cancelled": cancelled,
         "total_revenue": total_revenue,
     }
