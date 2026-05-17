@@ -47,13 +47,17 @@ def get_user_info(telegram_id: int) -> dict | None:
 
 def get_orders() -> list[dict]:
     db = get_db()
-    query = _orders_ref(db).where("status", "==", "active").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).get()
+    docs = _orders_ref(db).get()
     results = []
-    for doc in query:
+    for doc in docs:
         data = doc.to_dict()
+        if data.get("status") != "active":
+            continue
         data["_id"] = doc.id
         results.append(data)
-    return results
+    # Sort by createdAt descending in Python — no composite index needed
+    results.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
+    return results[:50]
 
 
 def get_all_staff() -> list[dict]:
