@@ -61,18 +61,28 @@ def _flavor_keyboard(recipes: list, has_entries: bool) -> InlineKeyboardMarkup:
 # ── Ingredient calculation ───────────────────────────────────────────────────
 
 def _calculate(recipe: dict, weight: float) -> dict[str, float]:
-    """Return {ingredient_name: amount} for given finished popcorn weight."""
+    """
+    Recipe document has flat numeric fields:
+      'ГОТОВИЙ ПРОДУКТ' — batch output weight (kg)
+      all other numeric fields — ingredient amounts per that batch
+
+    multiplier = enteredWeight / ГОТОВИЙ_ПРОДУКТ
+    ingredient_result = field_value × multiplier
+    """
+    batch_weight = float(recipe.get("ГОТОВИЙ ПРОДУКТ") or 1.0)
+    if batch_weight <= 0:
+        batch_weight = 1.0
+    multiplier = weight / batch_weight
+
+    SKIP = {"_id", "name", "ГОТОВИЙ ПРОДУКТ"}
     result: dict[str, float] = {}
-    for ing in recipe.get("ingredients", []):
-        name = ing.get("name", "?")
-        # Support multiple possible field names for the per-kg ratio
-        per_kg = float(
-            ing.get("amountPerKg")
-            or ing.get("perKg")
-            or ing.get("amount")
-            or 0
-        )
-        result[name] = round(per_kg * weight, 3)
+    for key, value in recipe.items():
+        if key in SKIP:
+            continue
+        try:
+            result[key] = round(float(value) * multiplier, 3)
+        except (TypeError, ValueError):
+            continue
     return result
 
 
