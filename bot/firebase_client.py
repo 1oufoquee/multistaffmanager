@@ -31,6 +31,16 @@ def _orders_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Orders")
 
 
+def _recipes_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Recipes")
+
+
+def _writeoffs_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Writeoffs")
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+
 def is_authorized_user(telegram_id: int) -> bool:
     db = get_db()
     query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
@@ -41,9 +51,13 @@ def get_user_info(telegram_id: int) -> dict | None:
     db = get_db()
     query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
     if query:
-        return query[0].to_dict()
+        data = query[0].to_dict()
+        data["_id"] = query[0].id
+        return data
     return None
 
+
+# ── Orders ──────────────────────────────────────────────────────────────────
 
 def get_orders() -> list[dict]:
     db = get_db()
@@ -55,10 +69,11 @@ def get_orders() -> list[dict]:
             continue
         data["_id"] = doc.id
         results.append(data)
-    # Sort by createdAt descending in Python — no composite index needed
     results.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
     return results[:50]
 
+
+# ── Staff ───────────────────────────────────────────────────────────────────
 
 def get_all_staff() -> list[dict]:
     db = get_db()
@@ -70,6 +85,20 @@ def get_all_staff() -> list[dict]:
         results.append(data)
     return results
 
+
+def get_admin_users() -> list[dict]:
+    db = get_db()
+    docs = _users_ref(db).get()
+    admins = []
+    for doc in docs:
+        data = doc.to_dict()
+        if data.get("userRole") == "admin":
+            data["_id"] = doc.id
+            admins.append(data)
+    return admins
+
+
+# ── Statistics ──────────────────────────────────────────────────────────────
 
 def get_statistics() -> dict:
     db = get_db()
@@ -96,3 +125,37 @@ def get_statistics() -> dict:
         "completed": completed,
         "total_revenue": total_revenue,
     }
+
+
+# ── Recipes ─────────────────────────────────────────────────────────────────
+
+def get_recipes() -> list[dict]:
+    db = get_db()
+    docs = _recipes_ref(db).get()
+    results = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["_id"] = doc.id
+        results.append(data)
+    return results
+
+
+# ── Write-offs ───────────────────────────────────────────────────────────────
+
+def save_writeoff(writeoff_data: dict) -> str:
+    db = get_db()
+    writeoff_data["createdAt"] = firestore.SERVER_TIMESTAMP
+    _, doc_ref = _writeoffs_ref(db).add(writeoff_data)
+    return doc_ref.id
+
+
+def get_writeoffs_history(limit: int = 20) -> list[dict]:
+    db = get_db()
+    docs = _writeoffs_ref(db).get()
+    results = []
+    for doc in docs:
+        data = doc.to_dict()
+        data["_id"] = doc.id
+        results.append(data)
+    results.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
+    return results[:limit]

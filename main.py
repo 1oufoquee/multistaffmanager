@@ -8,6 +8,7 @@ from bot.handlers.start import start_handler, MAIN_KEYBOARD
 from bot.handlers.orders import orders_handler
 from bot.handlers.stats import stats_handler
 from bot.handlers.staff import staff_handler
+from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -51,6 +52,7 @@ async def keyboard_router(update: Update, context):
         await staff_handler(update, context)
     elif text == "📊 Статистика":
         await stats_handler(update, context)
+    # "🍿 Списання" is handled by the ConversationHandler — no case needed here
 
 
 async def unknown_handler(update, context):
@@ -71,6 +73,9 @@ def main():
 
     app = ApplicationBuilder().token(token).build()
 
+    # ConversationHandler must be registered BEFORE general text handler
+    app.add_handler(build_writeoff_conversation())
+
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("orders", orders_handler))
@@ -79,7 +84,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
 
-    logger.info("Handlers registered: /start /help /orders /staff /stats + keyboard")
+    logger.info("Handlers registered: /start /help /orders /staff /stats + keyboard + writeoffs")
     logger.info("Starting polling... Bot is ready.")
 
     app.run_polling(

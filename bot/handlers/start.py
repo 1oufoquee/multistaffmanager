@@ -5,7 +5,7 @@ from bot.firebase_client import is_authorized_user, get_user_info
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
-        [KeyboardButton("📊 Статистика")],
+        [KeyboardButton("📊 Статистика"), KeyboardButton("🍿 Списання")],
     ],
     resize_keyboard=True,
 )
@@ -28,8 +28,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = info.get("name", user.first_name) if info else user.first_name
 
     await update.message.reply_text(
-        f"Вітаємо, *{name}*\\!\n\n"
+        f"Вітаємо, *{name}*!\n\n"
         "Оберіть розділ за допомогою кнопок нижче:",
-        parse_mode="MarkdownV2",
+        parse_mode="Markdown",
         reply_markup=MAIN_KEYBOARD,
     )
