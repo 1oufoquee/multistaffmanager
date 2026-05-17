@@ -13,39 +13,56 @@ from bot.utils import format_timestamp
 logger = logging.getLogger(__name__)
 
 # ── Conversation states ──────────────────────────────────────────────────────
-WRITEOFF_MENU   = 0   # admin-only: [Нове списання | Архів]
-FLAVOR_SELECT   = 1   # pick a popcorn flavor from inline buttons
-WEIGHT_INPUT    = 2   # enter finished popcorn weight as text
-CONFIRMING      = 3   # review ingredient report → save or cancel
+WRITEOFF_MENU = 0   # admin-only: [Нове списання | Архів]
+FLAVOR_SELECT = 1   # pick a popcorn flavor from inline buttons
+WEIGHT_INPUT  = 2   # enter finished popcorn weight as text
+CONFIRMING    = 3   # review ingredient report → save or cancel
 
 
-# ── Ingredient emoji map ─────────────────────────────────────────────────────
+# ── Emoji helpers ─────────────────────────────────────────────────────────────
 
 def _ing_emoji(name: str) -> str:
     n = name.lower()
-    if "кукурудза" in n:   return "🌽"
-    if "масло" in n:        return "🥥"
-    if "flavacol" in n:     return "🧂"
-    if "сіль" in n or "соль" in n: return "🧂"
-    if "сир" in n:          return "🧀"
-    if "бекон" in n:        return "🥓"
-    if "краб" in n:         return "🦀"
-    if "ікра" in n or "икра" in n: return "🐟"
-    if "карамель" in n:     return "🍯"
-    if "цукор" in n:        return "🍚"
-    if "добавка" in n:      return "🔸"
+    if "кукурудза" in n:              return "🌽"
+    if "масло" in n:                   return "🥥"
+    if "flavacol" in n:               return "🧂"
+    if "сіль" in n or "соль" in n:    return "🧂"
+    if "сир" in n:                     return "🧀"
+    if "бекон" in n:                   return "🥓"
+    if "краб" in n:                    return "🦀"
+    if "ікра" in n or "икра" in n:    return "🐟"
+    if "карамель" in n:               return "🍯"
+    if "цукор" in n:                   return "🍚"
+    if "добавка" in n:                 return "🔸"
     return "•"
 
 
-# ── Keyboard builders ────────────────────────────────────────────────────────
+def _flavor_emoji(name: str) -> str:
+    n = name.lower()
+    if "сир" in n:                     return "🧀"
+    if "бекон" in n:                   return "🥓"
+    if "краб" in n:                    return "🦀"
+    if "ікра" in n or "икра" in n:    return "🐟"
+    if "карамель" in n:               return "🍯"
+    if "сіль" in n or "соль" in n:    return "🧂"
+    return "🍿"
 
-def _flavor_keyboard(recipes: list, has_entries: bool) -> InlineKeyboardMarkup:
-    """Inline keyboard with one button per recipe (2 per row)."""
+
+# ── Keyboard builder ──────────────────────────────────────────────────────────
+
+def _flavor_keyboard(
+    recipes: list,
+    has_entries: bool,
+    entered_names: set | None = None,
+) -> InlineKeyboardMarkup:
+    """2-column inline keyboard. Already-entered flavors get a ✅ suffix."""
+    entered_names = entered_names or set()
     rows = []
     row: list = []
     for i, recipe in enumerate(recipes):
-        name = recipe.get("name") or recipe.get("_id", f"#{i}")
-        row.append(InlineKeyboardButton(name, callback_data=f"wo_f_{i}"))
+        name  = recipe.get("name") or recipe.get("_id", f"#{i}")
+        label = f"{name} ✅" if name in entered_names else name
+        row.append(InlineKeyboardButton(label, callback_data=f"wo_f_{i}"))
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -58,16 +75,15 @@ def _flavor_keyboard(recipes: list, has_entries: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-# ── Ingredient calculation ───────────────────────────────────────────────────
+# ── Ingredient calculation ────────────────────────────────────────────────────
 
 def _calculate(recipe: dict, weight: float) -> dict[str, float]:
     """
-    Recipe document has flat numeric fields:
+    Recipe has flat fields:
       'ГОТОВИЙ ПРОДУКТ' — batch output weight (kg)
-      all other numeric fields — ingredient amounts per that batch
+      all other numeric fields  — ingredient amounts per that batch
 
-    multiplier = enteredWeight / ГОТОВИЙ_ПРОДУКТ
-    ingredient_result = field_value × multiplier
+    result_ingredient = field_value × (weight / ГОТОВИЙ_ПРОДУКТ)
     """
     batch_weight = float(recipe.get("ГОТОВИЙ ПРОДУКТ") or 1.0)
     if batch_weight <= 0:
@@ -94,23 +110,47 @@ def _accumulate(total: dict, new: dict) -> dict:
 
 # ── Report formatting ─────────────────────────────────────────────────────────
 
-def _format_ingredient_report(total_ingredients: dict[str, float]) -> str:
-    if not total_ingredients:
-        return "_Рецепти не містять інгредієнтів_"
-    lines = []
-    for name, amount in total_ingredients.items():
-        lines.append(f"{_ing_emoji(name)} {name} — {amount}")
-    return "\n".join(lines)
+def _format_per_flavor_report(flavor_entries: list) -> str:
+    """
+    Each flavor gets its own section with its own ingredient breakdown.
+
+    🧀 Сир (3.5 кг)
+    • Кукурудза Weaver Gold — 1.470
+    • Масло кокосове — 0.490
+
+    🥓 Бекон (2 кг)
+    • Кукурудза Weaver Gold — 0.840
+    ...
+    """
+    if not flavor_entries:
+        return "_Немає даних_"
+
+    sections = []
+    for entry in flavor_entries:
+        name        = entry["name"]
+        weight      = entry["weight"]
+        ingredients = entry.get("ingredients", {})
+
+        header = f"{_flavor_emoji(name)} *{name}* ({weight} кг)"
+        if ingredients:
+            lines = [header]
+            for ing_name, amount in ingredients.items():
+                lines.append(f"• {ing_name} — {amount}")
+            sections.append("\n".join(lines))
+        else:
+            sections.append(f"{header}\n_рецепт без інгредієнтів_")
+
+    return "\n\n".join(sections)
 
 
 def _format_flavor_summary(flavor_entries: list) -> str:
     if not flavor_entries:
         return ""
-    parts = [f"{e['name']} {e['weight']} кг" for e in flavor_entries]
-    return "📝 Додано: " + " | ".join(parts)
+    parts = [f"{_flavor_emoji(e['name'])} {e['name']} {e['weight']} кг" for e in flavor_entries]
+    return "📝 " + " | ".join(parts)
 
 
-# ── Entry point ──────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 async def writeoff_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     telegram_id = update.effective_user.id
@@ -119,9 +159,9 @@ async def writeoff_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
 
     info = get_user_info(telegram_id)
-    context.user_data["staff_info"] = info or {}
+    context.user_data["staff_info"]  = info or {}
     context.user_data["telegram_id"] = telegram_id
-    context.user_data["chat_id"] = update.effective_chat.id
+    context.user_data["chat_id"]     = update.effective_chat.id
 
     is_admin = info and info.get("userRole") == "admin"
 
@@ -140,7 +180,7 @@ async def writeoff_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return await _begin_flavor_select(context, update.message)
 
 
-# ── Admin menu ───────────────────────────────────────────────────────────────
+# ── Admin menu ────────────────────────────────────────────────────────────────
 
 async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -157,7 +197,7 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return WRITEOFF_MENU
 
 
-# ── Flavor selection ─────────────────────────────────────────────────────────
+# ── Flavor selection ──────────────────────────────────────────────────────────
 
 async def _begin_flavor_select(
     context: ContextTypes.DEFAULT_TYPE,
@@ -187,8 +227,8 @@ async def _begin_flavor_select(
             await msg_obj.reply_text(text)
         return ConversationHandler.END
 
-    context.user_data["recipes"]          = recipes
-    context.user_data["flavor_entries"]   = []
+    context.user_data["recipes"]           = recipes
+    context.user_data["flavor_entries"]    = []
     context.user_data["total_ingredients"] = {}
 
     await context.bot.send_message(
@@ -212,20 +252,19 @@ async def handle_flavor_select(update: Update, context: ContextTypes.DEFAULT_TYP
     if query.data == "wo_done":
         return await _show_ingredient_summary(query, context)
 
-    # Parse flavor index: "wo_f_<idx>"
     try:
-        idx = int(query.data[len("wo_f_"):])
+        idx    = int(query.data[len("wo_f_"):])
         recipe = context.user_data["recipes"][idx]
     except (ValueError, IndexError):
         await query.answer("Невідомий смак, спробуйте знову.", show_alert=True)
         return FLAVOR_SELECT
 
     flavor_name = recipe.get("name") or recipe.get("_id", f"#{idx}")
-    context.user_data["current_flavor_name"]  = flavor_name
+    context.user_data["current_flavor_name"]   = flavor_name
     context.user_data["current_flavor_recipe"] = recipe
 
     await query.edit_message_text(
-        f"✍️ *{flavor_name}*\n\n"
+        f"{_flavor_emoji(flavor_name)} *{flavor_name}*\n\n"
         f"Введіть вагу готового попкорну (кг):\n"
         f"_Приклад: 2.5_\n\n"
         f"/cancel — скасувати",
@@ -234,11 +273,11 @@ async def handle_flavor_select(update: Update, context: ContextTypes.DEFAULT_TYP
     return WEIGHT_INPUT
 
 
-# ── Weight input ─────────────────────────────────────────────────────────────
+# ── Weight input ──────────────────────────────────────────────────────────────
 
 async def receive_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
-    raw = update.message.text.strip().replace(",", ".")
+    raw     = update.message.text.strip().replace(",", ".")
 
     try:
         weight = float(raw)
@@ -251,16 +290,22 @@ async def receive_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return WEIGHT_INPUT
 
-    flavor_name   = context.user_data["current_flavor_name"]
-    recipe        = context.user_data["current_flavor_recipe"]
-    ingredients   = _calculate(recipe, weight)
+    flavor_name = context.user_data["current_flavor_name"]
+    recipe      = context.user_data["current_flavor_recipe"]
+    ingredients = _calculate(recipe, weight)
 
-    # Accumulate
-    context.user_data["flavor_entries"].append({"name": flavor_name, "weight": weight})
+    # Store per-flavor entry WITH its own ingredient breakdown
+    context.user_data["flavor_entries"].append({
+        "name":        flavor_name,
+        "weight":      weight,
+        "ingredients": ingredients,
+    })
     _accumulate(context.user_data["total_ingredients"], ingredients)
 
-    summary = _format_flavor_summary(context.user_data["flavor_entries"])
-    recipes  = context.user_data["recipes"]
+    flavor_entries = context.user_data["flavor_entries"]
+    entered_names  = {e["name"] for e in flavor_entries}
+    recipes        = context.user_data["recipes"]
+    summary        = _format_flavor_summary(flavor_entries)
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -270,29 +315,22 @@ async def receive_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"Оберіть ще один смак або підтвердіть:"
         ),
         parse_mode="Markdown",
-        reply_markup=_flavor_keyboard(recipes, has_entries=True),
+        reply_markup=_flavor_keyboard(recipes, has_entries=True, entered_names=entered_names),
     )
     return FLAVOR_SELECT
 
 
-# ── Ingredient summary before save ───────────────────────────────────────────
+# ── Ingredient summary before save ────────────────────────────────────────────
 
 async def _show_ingredient_summary(query, context: ContextTypes.DEFAULT_TYPE) -> int:
-    total_ingredients = context.user_data.get("total_ingredients", {})
-    flavor_entries    = context.user_data.get("flavor_entries", [])
+    flavor_entries = context.user_data.get("flavor_entries", [])
 
     if not flavor_entries:
         await query.answer("Додайте хоча б один смак!", show_alert=True)
         return FLAVOR_SELECT
 
-    report = _format_ingredient_report(total_ingredients)
-    flavors_line = " | ".join(f"{e['name']} {e['weight']}кг" for e in flavor_entries)
-
-    text = (
-        f"📋 *Звіт про списання*\n\n"
-        f"🍿 {flavors_line}\n\n"
-        f"{report}"
-    )
+    report = _format_per_flavor_report(flavor_entries)
+    text   = f"📋 *Звіт про списання*\n\n{report}"
 
     kb = InlineKeyboardMarkup([
         [
@@ -305,7 +343,7 @@ async def _show_ingredient_summary(query, context: ContextTypes.DEFAULT_TYPE) ->
     return CONFIRMING
 
 
-# ── Save & notify ────────────────────────────────────────────────────────────
+# ── Save & notify ─────────────────────────────────────────────────────────────
 
 async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -321,39 +359,25 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     flavor_entries    = context.user_data.get("flavor_entries", [])
     total_ingredients = context.user_data.get("total_ingredients", {})
 
-    # Build items list (popcorn name + weight + per-flavor ingredients)
-    items = []
-    for entry in flavor_entries:
-        recipes = context.user_data.get("recipes", [])
-        recipe  = next(
-            (r for r in recipes if (r.get("name") or r.get("_id")) == entry["name"]),
-            {},
-        )
-        items.append({
-            "popcornName": entry["name"],
-            "weight":      entry["weight"],
-            "ingredients": _calculate(recipe, entry["weight"]),
-        })
-
     try:
         doc_id = save_writeoff({
             "staffName":        staff_info.get("name", "—"),
             "staffAppId":       staff_info.get("_id", "—"),
             "telegramId":       telegram_id,
-            "items":            items,
+            "items":            flavor_entries,
             "totalIngredients": total_ingredients,
         })
     except Exception as e:
         await query.edit_message_text(f"❌ Помилка збереження: {e}")
         return ConversationHandler.END
 
-    report = _format_ingredient_report(total_ingredients)
+    report = _format_per_flavor_report(flavor_entries)
     await query.edit_message_text(
-        f"✅ *Списання збережено!*\n\n{report}\n\nID: `{doc_id}`",
+        f"✅ *Списання збережено!*\n\n{report}\n\n`{doc_id}`",
         parse_mode="Markdown",
     )
 
-    await _notify_admins(context, staff_info, flavor_entries, total_ingredients)
+    await _notify_admins(context, staff_info, flavor_entries)
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -362,7 +386,6 @@ async def _notify_admins(
     context: ContextTypes.DEFAULT_TYPE,
     staff_info: dict,
     flavor_entries: list,
-    total_ingredients: dict,
 ):
     try:
         admins = get_admin_users()
@@ -370,14 +393,12 @@ async def _notify_admins(
         logger.warning(f"Could not fetch admins: {e}")
         return
 
-    staff_name   = staff_info.get("name", "—")
-    flavors_line = " | ".join(f"{e['name']} {e['weight']}кг" for e in flavor_entries)
-    report       = _format_ingredient_report(total_ingredients)
+    staff_name = staff_info.get("name", "—")
+    report     = _format_per_flavor_report(flavor_entries)
 
     text = (
         f"🔔 Списання готове!\n\n"
-        f"👤 {staff_name}\n"
-        f"🍿 {flavors_line}\n\n"
+        f"👤 {staff_name}\n\n"
         f"{report}"
     )
 
@@ -391,7 +412,7 @@ async def _notify_admins(
             logger.warning(f"Failed to notify admin {tid}: {e}")
 
 
-# ── Archive ──────────────────────────────────────────────────────────────────
+# ── Archive ───────────────────────────────────────────────────────────────────
 
 async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -409,18 +430,17 @@ async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
         created = format_timestamp(entry.get("createdAt"))
         staff   = entry.get("staffName", "—")
         items   = entry.get("items", [])
-        total   = entry.get("totalIngredients", {})
-
-        flavors = " | ".join(
-            f"{it.get('popcornName','?')} {it.get('weight',0)}кг"
-            for it in items if isinstance(it, dict)
-        ) or "—"
 
         lines.append(f"🕐 {created}  👤 {staff}")
-        lines.append(f"🍿 {flavors}")
-        if total:
-            for name, amount in total.items():
-                lines.append(f"  {_ing_emoji(name)} {name} — {amount}")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            flavor_name = item.get("popcornName") or item.get("name", "?")
+            weight      = item.get("weight", 0)
+            ingredients = item.get("ingredients", {})
+            lines.append(f"{_flavor_emoji(flavor_name)} {flavor_name} ({weight} кг)")
+            for ing_name, amount in ingredients.items():
+                lines.append(f"  • {ing_name} — {amount}")
         lines.append("─────────────")
 
     text = "\n".join(lines)
@@ -430,7 +450,7 @@ async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="Markdown")
 
 
-# ── Cancel ───────────────────────────────────────────────────────────────────
+# ── Cancel ────────────────────────────────────────────────────────────────────
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -438,7 +458,7 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
-# ── Build ConversationHandler ────────────────────────────────────────────────
+# ── Build ConversationHandler ─────────────────────────────────────────────────
 
 def build_writeoff_conversation() -> ConversationHandler:
     flavor_or_cancel = CallbackQueryHandler(
