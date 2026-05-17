@@ -40,21 +40,40 @@ def _writeoffs_ref(db):
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
+# NOTE: We intentionally avoid Firestore .where("telegramId", "==", ...) because
+# Firestore may store the field as float64, which causes type-mismatch misses
+# when Python sends an int.  Instead we fetch all users fresh on every call
+# and compare after casting both sides to int — safe for small staff lists.
+
+def _find_user_doc(telegram_id: int):
+    """
+    Returns (doc_snapshot, dict) for the matching user, or (None, None).
+    Fetches all users fresh from Firestore on every call — no in-memory cache.
+    """
+    db = get_db()
+    docs = _users_ref(db).get()
+    for doc in docs:
+        data = doc.to_dict() or {}
+        stored = data.get("telegramId")
+        try:
+            if int(stored) == int(telegram_id):
+                return doc, data
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
 
 def is_authorized_user(telegram_id: int) -> bool:
-    db = get_db()
-    query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
-    return len(query) > 0
+    doc, _ = _find_user_doc(telegram_id)
+    return doc is not None
 
 
 def get_user_info(telegram_id: int) -> dict | None:
-    db = get_db()
-    query = _users_ref(db).where("telegramId", "==", telegram_id).limit(1).get()
-    if query:
-        data = query[0].to_dict()
-        data["_id"] = query[0].id
-        return data
-    return None
+    doc, data = _find_user_doc(telegram_id)
+    if doc is None:
+        return None
+    data["_id"] = doc.id
+    return data
 
 
 # ── Orders ──────────────────────────────────────────────────────────────────
