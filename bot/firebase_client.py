@@ -28,7 +28,7 @@ def _users_ref(db):
 
 
 def _orders_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Orders").document("Orders").collection("Orders")
+    return db.collection("Cinema").document("atmosfera").collection("Orders")
 
 
 def is_authorized_user(telegram_id: int) -> bool:
