@@ -47,7 +47,7 @@ def get_user_info(telegram_id: int) -> dict | None:
 
 def get_orders() -> list[dict]:
     db = get_db()
-    query = _orders_ref(db).order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).get()
+    query = _orders_ref(db).where("status", "==", "active").order_by("createdAt", direction=firestore.Query.DESCENDING).limit(50).get()
     results = []
     for doc in query:
         data = doc.to_dict()

@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from bot.firebase_client import is_authorized_user, get_orders
-from bot.utils import format_timestamp, format_items
+from bot.utils import format_timestamp, format_items, format_seat_id
 
 STATUS_EMOJI = {
     "active": "🟢",
@@ -31,22 +31,18 @@ async def orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"📦 *Замовлення* — {len(orders)} шт\.\n"]
     for order in orders:
-        seat_id = order.get("seatId", "—")
-        raw_status = order.get("status", "—")
-        status_icon = STATUS_EMOJI.get(raw_status, "❔")
-        status_label = _esc(raw_status)
+        seat_id = format_seat_id(str(order.get("seatId", "—")))
         total = order.get("total", 0)
         user_id = order.get("userId", "—")
         created = format_timestamp(order.get("createdAt"))
         items_str = format_items(order.get("items", []))
 
         lines.append(
-            f"🪑 *Місце:* {_esc(str(seat_id))}\n"
-            f"📋 *Позиції:* {_esc(items_str)}\n"
-            f"💰 *Сума:* {_esc(str(total))} грн\n"
-            f"{status_icon} *Статус:* {status_label}\n"
-            f"🕐 *Час:* {_esc(created)}\n"
-            f"👤 *Клієнт:* `{user_id}`"
+            f"🪑 *{_esc(seat_id)}*\n"
+            f"📋 {_esc(items_str)}\n"
+            f"💰 {_esc(str(total))} грн\n"
+            f"🕐 {_esc(created)}\n"
+            f"👤 `{user_id}`"
         )
         lines.append("─────────────────")
 

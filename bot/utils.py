@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 
 
@@ -16,6 +17,18 @@ def format_timestamp(ts) -> str:
     except Exception:
         pass
     return str(ts)
+
+
+def format_seat_id(seat_id: str) -> str:
+    """Convert Hall4_Row2_Seat5 → Зала 4 Ряд 2 Місце 5"""
+    if not seat_id or seat_id == "—":
+        return seat_id
+    result = seat_id
+    result = re.sub(r'(?i)hall(\d+)', r'Зала \1', result)
+    result = re.sub(r'(?i)row(\d+)', r'Ряд \1', result)
+    result = re.sub(r'(?i)seat(\d+)', r'Місце \1', result)
+    result = result.replace("_", " ").strip()
+    return result
 
 
 def format_items(items) -> str:
