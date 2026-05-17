@@ -23,17 +23,18 @@ CONFIRMING    = 3   # review ingredient report → save or cancel
 
 def _ing_emoji(name: str) -> str:
     n = name.lower()
-    if "кукурудза" in n:              return "🌽"
-    if "масло" in n:                   return "🥥"
-    if "flavacol" in n:               return "🧂"
-    if "сіль" in n or "соль" in n:    return "🧂"
-    if "сир" in n:                     return "🧀"
-    if "бекон" in n:                   return "🥓"
-    if "краб" in n:                    return "🦀"
-    if "ікра" in n or "икра" in n:    return "🐟"
-    if "карамель" in n:               return "🍯"
-    if "цукор" in n:                   return "🍚"
-    if "добавка" in n:                 return "🔸"
+    if "кукурудза" in n:                       return "🌽"
+    if "масло" in n:                            return "🥥"
+    if "flavacol" in n:                        return "🧂"
+    if "сіль" in n or "соль" in n:             return "🧂"
+    if "сир" in n:                              return "🧀"
+    if "бекон" in n:                            return "🥓"
+    if "краб" in n:                             return "🦀"
+    if "червона" in n or "красная" in n:       return "🔴"
+    if "ікра" in n or "икра" in n:             return "🐟"
+    if "карамель" in n:                        return "🍯"
+    if "цукор" in n:                            return "🍚"
+    if "добавка" in n:                          return "🔸"
     return "•"
 
 
@@ -106,6 +107,59 @@ def _accumulate(total: dict, new: dict) -> dict:
     for k, v in new.items():
         total[k] = round(total.get(k, 0.0) + v, 3)
     return total
+
+
+def _split_common_specific(flavor_entries: list) -> tuple[dict, dict]:
+    """
+    Ingredients that appear in MORE THAN ONE flavor entry → common (summed).
+    Ingredients that appear in exactly ONE flavor entry → specific (kept separate).
+
+    This automatically makes Кукурудза / Масло / FLAVACOL common (shared base)
+    while Добавка сир / Добавка Бекон / etc. stay separate (single-flavor use).
+    """
+    if not flavor_entries:
+        return {}, {}
+
+    # Count how many different flavor entries each ingredient key appears in
+    presence: dict[str, int] = {}
+    for entry in flavor_entries:
+        for key in entry.get("ingredients", {}):
+            presence[key] = presence.get(key, 0) + 1
+
+    common:   dict[str, float] = {}
+    specific: dict[str, float] = {}
+
+    for entry in flavor_entries:
+        for key, val in entry.get("ingredients", {}).items():
+            if presence[key] > 1:
+                common[key]   = round(common.get(key, 0.0) + val, 3)
+            else:
+                specific[key] = round(specific.get(key, 0.0) + val, 3)
+
+    return common, specific
+
+
+def _format_final_report(flavor_entries: list) -> str:
+    """
+    Common ingredients (shared across 2+ flavors) summed at top.
+    Flavor-specific additives listed below, separated by a blank line.
+    """
+    if not flavor_entries:
+        return "_Немає даних_"
+
+    common, specific = _split_common_specific(flavor_entries)
+    lines: list[str] = []
+
+    for name, amount in common.items():
+        lines.append(f"{_ing_emoji(name)} {name} — {amount}")
+
+    if specific:
+        if common:
+            lines.append("")            # blank line separator
+        for name, amount in specific.items():
+            lines.append(f"{_ing_emoji(name)} {name} — {amount}")
+
+    return "\n".join(lines) if lines else "_Рецепти не містять інгредієнтів_"
 
 
 # ── Report formatting ─────────────────────────────────────────────────────────
@@ -329,7 +383,7 @@ async def _show_ingredient_summary(query, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer("Додайте хоча б один смак!", show_alert=True)
         return FLAVOR_SELECT
 
-    report = _format_per_flavor_report(flavor_entries)
+    report = _format_final_report(flavor_entries)
     text   = f"📋 *Звіт про списання*\n\n{report}"
 
     kb = InlineKeyboardMarkup([
@@ -371,7 +425,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text(f"❌ Помилка збереження: {e}")
         return ConversationHandler.END
 
-    report = _format_per_flavor_report(flavor_entries)
+    report = _format_final_report(flavor_entries)
     await query.edit_message_text(
         f"✅ *Списання збережено!*\n\n{report}\n\n`{doc_id}`",
         parse_mode="Markdown",
@@ -394,7 +448,7 @@ async def _notify_admins(
         return
 
     staff_name = staff_info.get("name", "—")
-    report     = _format_per_flavor_report(flavor_entries)
+    report     = _format_final_report(flavor_entries)
 
     text = (
         f"🔔 Списання готове!\n\n"
