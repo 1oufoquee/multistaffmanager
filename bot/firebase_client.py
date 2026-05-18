@@ -23,40 +23,35 @@ def get_db():
     return _db
 
 
+# ── Collection refs ──────────────────────────────────────────────────────────
+
 def _users_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Users")
-
 
 def _orders_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Orders")
 
-
 def _recipes_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Recipes")
-
 
 def _writeoffs_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Writeoffs")
 
+def _menu_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Menu")
 
-# ── Auth ────────────────────────────────────────────────────────────────────
-# NOTE: We intentionally avoid Firestore .where("telegramId", "==", ...) because
-# Firestore may store the field as float64, which causes type-mismatch misses
-# when Python sends an int.  Instead we fetch all users fresh on every call
-# and compare after casting both sides to int — safe for small staff lists.
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+# Firestore may store telegramId as float64 — compare as int on the Python side.
+# Blocked users are denied access regardless of telegramId match.
 
 def _find_user_doc(telegram_id: int):
-    """
-    Returns (doc_snapshot, dict) for the matching user, or (None, None).
-    Fetches all users fresh from Firestore on every call — no in-memory cache.
-    """
+    """Returns (doc_snapshot, dict) or (None, None). Always fetches fresh."""
     db = get_db()
-    docs = _users_ref(db).get()
-    for doc in docs:
+    for doc in _users_ref(db).get():
         data = doc.to_dict() or {}
-        stored = data.get("telegramId")
         try:
-            if int(stored) == int(telegram_id):
+            if int(data.get("telegramId") or 0) == int(telegram_id):
                 return doc, data
         except (TypeError, ValueError):
             continue
@@ -64,8 +59,10 @@ def _find_user_doc(telegram_id: int):
 
 
 def is_authorized_user(telegram_id: int) -> bool:
-    doc, _ = _find_user_doc(telegram_id)
-    return doc is not None
+    doc, data = _find_user_doc(telegram_id)
+    if doc is None:
+        return False
+    return not data.get("isBlocked", False)
 
 
 def get_user_info(telegram_id: int) -> dict | None:
@@ -76,13 +73,12 @@ def get_user_info(telegram_id: int) -> dict | None:
     return data
 
 
-# ── Orders ──────────────────────────────────────────────────────────────────
+# ── Orders ───────────────────────────────────────────────────────────────────
 
 def get_orders() -> list[dict]:
     db = get_db()
-    docs = _orders_ref(db).get()
     results = []
-    for doc in docs:
+    for doc in _orders_ref(db).get():
         data = doc.to_dict()
         if data.get("status") != "active":
             continue
@@ -92,13 +88,12 @@ def get_orders() -> list[dict]:
     return results[:50]
 
 
-# ── Staff ───────────────────────────────────────────────────────────────────
+# ── Staff ────────────────────────────────────────────────────────────────────
 
 def get_all_staff() -> list[dict]:
     db = get_db()
-    docs = _users_ref(db).get()
     results = []
-    for doc in docs:
+    for doc in _users_ref(db).get():
         data = doc.to_dict()
         data["_id"] = doc.id
         results.append(data)
@@ -106,38 +101,48 @@ def get_all_staff() -> list[dict]:
 
 
 def get_admin_users() -> list[dict]:
+    """Only role='admin'. Директор intentionally excluded from notifications."""
     db = get_db()
-    docs = _users_ref(db).get()
-    admins = []
-    for doc in docs:
+    result = []
+    for doc in _users_ref(db).get():
         data = doc.to_dict()
         if data.get("userRole") == "admin":
             data["_id"] = doc.id
-            admins.append(data)
-    return admins
+            result.append(data)
+    return result
 
 
-# ── Statistics ──────────────────────────────────────────────────────────────
+def add_staff_user(data: dict) -> str:
+    db = get_db()
+    _, doc_ref = _users_ref(db).add(data)
+    return doc_ref.id
+
+
+def update_staff_user(doc_id: str, updates: dict) -> None:
+    db = get_db()
+    _users_ref(db).document(doc_id).update(updates)
+
+
+def delete_staff_user(doc_id: str) -> None:
+    db = get_db()
+    _users_ref(db).document(doc_id).delete()
+
+
+# ── Statistics ────────────────────────────────────────────────────────────────
 
 def get_statistics() -> dict:
     db = get_db()
-    all_orders = _orders_ref(db).get()
-
-    total_orders = 0
+    total_orders = active = completed = 0
     total_revenue = 0.0
-    completed = 0
-    active = 0
-
-    for doc in all_orders:
+    for doc in _orders_ref(db).get():
         data = doc.to_dict()
         total_orders += 1
-        status = data.get("status", "unknown")
+        status = data.get("status", "")
         if status == "active":
             active += 1
         elif status == "closed":
             completed += 1
             total_revenue += float(data.get("total", 0) or 0)
-
     return {
         "total_orders": total_orders,
         "active": active,
@@ -146,20 +151,19 @@ def get_statistics() -> dict:
     }
 
 
-# ── Recipes ─────────────────────────────────────────────────────────────────
+# ── Recipes ───────────────────────────────────────────────────────────────────
 
 def get_recipes() -> list[dict]:
     db = get_db()
-    docs = _recipes_ref(db).get()
     results = []
-    for doc in docs:
+    for doc in _recipes_ref(db).get():
         data = doc.to_dict()
         data["_id"] = doc.id
         results.append(data)
     return results
 
 
-# ── Write-offs ───────────────────────────────────────────────────────────────
+# ── Write-offs ────────────────────────────────────────────────────────────────
 
 def save_writeoff(writeoff_data: dict) -> str:
     db = get_db()
@@ -170,11 +174,56 @@ def save_writeoff(writeoff_data: dict) -> str:
 
 def get_writeoffs_history(limit: int = 20) -> list[dict]:
     db = get_db()
-    docs = _writeoffs_ref(db).get()
     results = []
-    for doc in docs:
+    for doc in _writeoffs_ref(db).get():
         data = doc.to_dict()
         data["_id"] = doc.id
         results.append(data)
     results.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
     return results[:limit]
+
+
+# ── Menu ──────────────────────────────────────────────────────────────────────
+
+def get_menu_items() -> list[dict]:
+    db = get_db()
+    results = []
+    for doc in _menu_ref(db).get():
+        data = doc.to_dict() or {}
+        data["_id"] = doc.id
+        results.append(data)
+    results.sort(key=lambda x: x.get("name", ""))
+    return results
+
+
+def get_menu_item(item_id: str) -> dict | None:
+    db = get_db()
+    doc = _menu_ref(db).document(item_id).get()
+    if doc.exists:
+        data = doc.to_dict() or {}
+        data["_id"] = doc.id
+        return data
+    return None
+
+
+def search_menu_items(query: str) -> list[dict]:
+    q = query.lower().strip()
+    return [
+        item for item in get_menu_items()
+        if q in item.get("name", "").lower() or q in item.get("_id", "").lower()
+    ][:10]
+
+
+def create_menu_item(item_id: str, data: dict) -> None:
+    db = get_db()
+    _menu_ref(db).document(item_id).set(data)
+
+
+def update_menu_item(item_id: str, updates: dict) -> None:
+    db = get_db()
+    _menu_ref(db).document(item_id).update(updates)
+
+
+def delete_menu_item(item_id: str) -> None:
+    db = get_db()
+    _menu_ref(db).document(item_id).delete()

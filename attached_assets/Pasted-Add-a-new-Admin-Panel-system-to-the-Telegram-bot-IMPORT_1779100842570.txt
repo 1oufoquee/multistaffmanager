@@ -1,0 +1,207 @@
+Add a new Admin Panel system to the Telegram bot.
+
+IMPORTANT:
+The mobile app is used by employees (cashiers) for creating orders and write-offs.
+Telegram bot is used by managers/admins only.
+
+Create a new button:
+👑 Адмін-Панель
+
+Visible for roles:
+
+* admin
+* Директор
+
+---
+
+## ROLES
+
+Roles logic:
+
+admin = Менеджер
+user = Касир
+Директор = Director/Silent Admin
+
+Role "Директор":
+
+* has FULL access to all bot functionality
+* can access 👑 Адмін-Панель
+* can manage menu
+* can manage staff
+* can view statistics
+* can view write-offs archive
+* can use all admin commands
+
+BUT:
+
+Do NOT send automatic notifications to Directors.
+
+Director should NOT receive:
+
+* "Списання готове!"
+* staff activity alerts
+* operational notifications
+* automatic manager notifications
+
+Director role should stay completely silent unless they manually use/open the bot.
+
+Only users with role:
+admin
+should receive automatic operational notifications.
+
+---
+
+## ADMIN PANEL
+
+Inside Admin Panel add:
+
+1. 🍔 Меню
+2. 👥 Працівники
+3. 🍿 Списання
+4. ⚙️ Налаштування
+
+---
+
+## MENU MANAGEMENT
+
+IMPORTANT FIREBASE PATH:
+
+Cinema/atmosfera/Menu
+
+All menu items must be stored ONLY there.
+
+Examples:
+Cinema/atmosfera/Menu/burger
+Cinema/atmosfera/Menu/mirinda
+Cinema/atmosfera/Menu/ice_cream_mango
+
+IMPORTANT:
+Menu item document ID is used internally by the mobile app.
+
+Document IDs MUST be entered manually in English.
+
+Examples:
+burger
+mirinda
+cheese_popcorn_l
+
+Do NOT auto-generate IDs.
+
+Do NOT create additional collections or nested menu structures.
+
+Keep full compatibility with the existing mobile app Firebase structure.
+
+Visible item name is stored separately in:
+"name"
+
+Example:
+{
+"name": "Бургер з картоплею фрі"
+}
+
+---
+
+## ADD MENU ITEM FLOW
+
+Step 1:
+Ask for item ID (English only)
+
+Step 2:
+Ask for visible item name
+
+Step 3:
+Ask for price
+
+Step 4:
+Ask for modifiers type
+
+Buttons:
+🌡 Температура
+🧂 Соуси
+❌ Без модифікаторів
+
+Logic:
+
+If 🌡 Температура:
+save:
+"modifiers": ["temperature"]
+
+If 🧂 Соуси:
+save:
+"modifiers": [
+"garlic",
+"tomato",
+"spicy",
+"piquant"
+]
+
+If ❌ Без модифікаторів:
+do not create modifiers field
+
+Save directly to:
+Cinema/atmosfera/Menu
+
+---
+
+## EDIT MENU ITEM
+
+Do NOT show the full menu list.
+
+Add search system.
+
+Ask:
+"Введіть ID або назву позиції"
+
+Search by:
+
+* document ID
+* name field
+
+If multiple items found:
+show buttons with matching items.
+
+After selecting item show:
+
+* ✏️ Назва
+* 💰 Ціна
+* 🧂 Модифікатори
+* 👁 Сховати
+* 🗑 Видалити
+
+Hide logic:
+Instead of deleting:
+"isHidden": true
+
+Deleting should still exist separately.
+
+---
+
+## STAFF MANAGEMENT
+
+Inside 👥 Працівники add:
+
+* add employee
+* remove employee
+* change role
+* link telegramId
+* block employee
+
+---
+
+## WRITEOFFS
+
+Inside 🍿 Списання add:
+
+* archive
+* search by date
+* who created write-off
+
+---
+
+## IMPORTANT
+
+Do NOT change existing order logic.
+Do NOT change write-off calculation system.
+Do NOT change mobile app structure.
+
+This update should only extend admin functionality through Telegram bot.
