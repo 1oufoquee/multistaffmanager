@@ -249,6 +249,15 @@ async def handle_menu_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
     d = query.data
+    if d == "ap_m_add":
+        context.user_data["ap_add"] = {}
+
+        await query.edit_message_text(
+            "➕ *Нова позиція*\n\nВведіть ID позиції англійською.\n\nНаприклад:\nburger\nmirinda\nice_cream_mango",
+            parse_mode="Markdown",
+        )
+
+        return AP_MENU_ADD_ID
 
     if d == "ap_home":
         await query.edit_message_text("👑 *Адмін-Панель*\n\nОберіть розділ:", parse_mode="Markdown", reply_markup=AP_HOME_KB)
