@@ -369,7 +369,7 @@ async def receive_add_mod(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     reply_markup=_kb(
         [_btn("➕ Продовжити", "ap_m_add")],
         [_btn("← Назад", "ap_menu")],
-    ),
+    )
 
      context.user_data.pop("ap_add", None)
      return AP_MENU_HOME
