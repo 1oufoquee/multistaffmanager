@@ -211,16 +211,17 @@ async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     if d == "ap_menu":
-        context.user_data.pop("ap_add", None)
-        context.user_data.pop("ap_sel_item", None)
-        context.user_data.pop("ap_edit_field", None)
+    context.user_data.pop("ap_add", None)
+    context.user_data.pop("ap_sel_item", None)
+    context.user_data.pop("ap_edit_field", None)
 
-    
-        await query.edit_message_text(
-        "🍔 *Меню*\n\nОберіть дію:",
+    await query.edit_message_text(
+        "🍔 *Меню*\\n\\nОберіть дію:",
         parse_mode="Markdown",
-        reply_markup=MENU_HOME_KB,)
-     return AP_MENU_HOME
+        reply_markup=MENU_HOME_KB,
+    )
+
+    return AP_MENU_HOME
 
     if d == "ap_staff":
         await query.edit_message_text("👥 *Управління Працівниками*\n\nОберіть дію:", parse_mode="Markdown",       
