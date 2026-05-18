@@ -218,12 +218,12 @@ async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await query.edit_message_text(
         "🍔 *Меню*\n\nОберіть дію:",
         parse_mode="Markdown",
-        reply_markup=MENU_HOME_KB,
-    )
+        reply_markup=MENU_HOME_KB,)
     return AP_MENU_HOME
 
     if d == "ap_staff":
-        await query.edit_message_text("👥 *Управління Працівниками*\n\nОберіть дію:", parse_mode="Markdown", reply_markup=STAFF_HOME_KB)
+        await query.edit_message_text("👥 *Управління Працівниками*\n\nОберіть дію:", parse_mode="Markdown",       
+        reply_markup=STAFF_HOME_KB)
         return AP_STAFF_HOME
 
     if d == "ap_wo":
