@@ -211,9 +211,9 @@ async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     if d == "ap_menu":
-    context.user_data.pop("ap_add", None)
-    context.user_data.pop("ap_sel_item", None)
-    context.user_data.pop("ap_edit_field", None)
+        context.user_data.pop("ap_add", None)
+        context.user_data.pop("ap_sel_item", None)
+        context.user_data.pop("ap_edit_field", None)
 
     await query.edit_message_text(
         "🍔 *Меню*\\n\\nОберіть дію:",
