@@ -572,8 +572,21 @@ async def handle_staff_home(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     d = query.data
 
+    # FIX: correctly reopen staff menu after actions
+    if d == "ap_staff":
+        await query.edit_message_text(
+            "👥 *Управління Працівниками*\n\nОберіть дію:",
+            parse_mode="Markdown",
+            reply_markup=STAFF_HOME_KB,
+        )
+        return AP_STAFF_HOME
+
     if d == "ap_home":
-        await query.edit_message_text("👑 *Адмін-Панель*\n\nОберіть розділ:", parse_mode="Markdown", reply_markup=AP_HOME_KB)
+        await query.edit_message_text(
+            "👑 *Адмін-Панель*\n\nОберіть розділ:",
+            parse_mode="Markdown",
+            reply_markup=AP_HOME_KB,
+        )
         return AP_HOME
 
     if d == "ap_s_add":
@@ -600,11 +613,13 @@ async def handle_staff_home(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         rows = []
         for s in staff:
-            name    = s.get("name", "—")
-            role    = _role_label(s.get("userRole", ""))
+            name = s.get("name", "—")
+            role = _role_label(s.get("userRole", ""))
             blocked = " 🚫" if s.get("isBlocked") else ""
             rows.append([_btn(f"{name} ({role}){blocked}", f"ap_sf_{s['_id']}")])
+
         rows.append(_back_btn("ap_home"))
+
         await query.edit_message_text(
             "👥 *Список співробітників:*",
             parse_mode="Markdown",
@@ -612,19 +627,25 @@ async def handle_staff_home(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return AP_STAFF_HOME
 
-    # ── Select staff member ──
+    # Select staff member
     if d.startswith("ap_sf_") and len(d) > 6:
         suffix = d[len("ap_sf_"):]
-        # Dispatch sub-actions
+
+        # dispatch actions
         if "_" in suffix:
             return await _handle_staff_action(query, context, suffix)
-        # Plain select
+
+        # open employee
         doc_id = suffix
         return await _show_staff_member(query, context, doc_id)
 
-    # ── Back from delete confirm ──
+    # back from delete confirm
     if d == "ap_s_back":
-        await query.edit_message_text("👥 *Управління Працівниками*\n\nОберіть дію:", parse_mode="Markdown", reply_markup=STAFF_HOME_KB)
+        await query.edit_message_text(
+            "👥 *Управління Працівниками*\n\nОберіть дію:",
+            parse_mode="Markdown",
+            reply_markup=STAFF_HOME_KB,
+        )
         return AP_STAFF_HOME
 
     return AP_STAFF_HOME
