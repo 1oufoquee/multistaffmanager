@@ -366,8 +366,10 @@ async def receive_add_mod(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.edit_message_text(
         f"✅ *Позицію додано!*\n\nID: `{add['id']}`\nНазва: {item_data['name']}\nЦіна: {item_data['price']} грн",
         parse_mode="Markdown",
-        reply_markup=_kb(_back_btn("ap_menu")),
-    )
+        reply_markup=_kb(
+         [_btn("➕ Продовжити", "ap_m_add")],
+         [_btn("← Назад", "ap_menu")],
+)
     context.user_data.pop("ap_add", None)
     return AP_MENU_HOME
 
