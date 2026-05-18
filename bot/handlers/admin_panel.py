@@ -368,7 +368,7 @@ async def receive_add_mod(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     parse_mode="Markdown",
     reply_markup=_kb(
         [_btn("➕ Продовжити", "ap_m_add")],
-        [_btn("← Назад", "ap_menu")],
+        [_btn("← Назад", "ap_home")],
     ),
 )
 
