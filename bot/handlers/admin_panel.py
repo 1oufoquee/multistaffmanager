@@ -216,20 +216,27 @@ async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         context.user_data.pop("ap_edit_field", None)
 
         await query.edit_message_text(
-        "🍔 *Меню*\\n\\nОберіть дію:",
-        parse_mode="Markdown",
-        reply_markup=MENU_HOME_KB,
-    )
+            "🍔 *Меню*\n\nОберіть дію:",
+            parse_mode="Markdown",
+            reply_markup=MENU_HOME_KB,
+        )
 
-    return AP_MENU_HOME
+        return AP_MENU_HOME
 
     if d == "ap_staff":
-        await query.edit_message_text("👥 *Управління Працівниками*\n\nОберіть дію:", parse_mode="Markdown",       
-        reply_markup=STAFF_HOME_KB)
+        await query.edit_message_text(
+            "👥 *Управління Працівниками*\n\nОберіть дію:",
+            parse_mode="Markdown",
+            reply_markup=STAFF_HOME_KB,
+        )
         return AP_STAFF_HOME
 
     if d == "ap_wo":
-        await query.edit_message_text("🍿 *Списання*\n\nОберіть дію:", parse_mode="Markdown", reply_markup=WO_HOME_KB)
+        await query.edit_message_text(
+            "🍿 *Списання*\n\nОберіть дію:",
+            parse_mode="Markdown",
+            reply_markup=WO_HOME_KB,
+        )
         return AP_WO_HOME
 
     if d == "ap_sets":
