@@ -130,19 +130,46 @@ def delete_staff_user(doc_id: str) -> None:
 
 # ── Statistics ────────────────────────────────────────────────────────────────
 
+from datetime import datetime
+
+
 def get_statistics() -> dict:
     db = get_db()
-    total_orders = active = completed = 0
+
+    total_orders = 0
+    active = 0
+    completed = 0
     total_revenue = 0.0
+
+    today = datetime.now().date()
+
     for doc in _orders_ref(db).get():
         data = doc.to_dict()
+
+        created = data.get("createdAt")
+        if not created:
+            continue
+
+        try:
+            order_date = created.date()
+        except Exception:
+            continue
+
+        # Only today's orders
+        if order_date != today:
+            continue
+
         total_orders += 1
+
         status = data.get("status", "")
+
         if status == "active":
             active += 1
+
         elif status == "closed":
             completed += 1
             total_revenue += float(data.get("total", 0) or 0)
+
     return {
         "total_orders": total_orders,
         "active": active,
