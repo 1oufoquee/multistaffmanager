@@ -2,6 +2,7 @@ import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+from datetime import datetime
 
 _app = None
 _db = None
@@ -129,9 +130,6 @@ def delete_staff_user(doc_id: str) -> None:
 
 
 # ── Statistics ────────────────────────────────────────────────────────────────
-
-from datetime import datetime
-
 
 def get_statistics() -> dict:
     db = get_db()
