@@ -9,7 +9,10 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from bot.handlers.cinema_schedule import ...
+from bot.handlers.cinema_schedule import (
+    cinema_schedule_handler,
+    handle_schedule_callbacks,
+)
 
 from bot.handlers.start import start_handler, MAIN_KEYBOARD, get_keyboard
 from bot.handlers.orders import orders_handler
