@@ -28,7 +28,7 @@ def get_today_sessions():
 
     sessions = []
 
-    blocks = soup.find_all("div", class_="ns")
+    blocks = soup.select("div.ns")
 
     for block in blocks:
         try:
