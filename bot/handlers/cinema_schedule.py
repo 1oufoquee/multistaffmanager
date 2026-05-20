@@ -47,8 +47,30 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
     telegram_id = update.effective_user.id
 
     if d == "cs_next":
+        from bot.services.schedule_service import get_nearest_session
+
+        session = get_nearest_session()
+
+        if not session:
+            await query.edit_message_text(
+                "❌ Не вдалося отримати розклад.",
+                reply_markup=SCHEDULE_KB,
+            )
+            return
+
+        movie = session["movie"]
+        start_time = session["time"]
+        fmt = session["format"]
+        mins = session["minutesLeft"]
+
         await query.edit_message_text(
-            "🎞 Найближчий сеанс\n\n(тут буде логіка розкладу)",
+            f"🎞 *Найближчий сеанс*\n\n"
+            f"🎬 {movie}\n"
+            f"🕐 {start_time}\n"
+            f"🎟 {fmt}\n"
+            f"⌛ Через: {mins} хв",
+            parse_mode="Markdown",
+            reply_markup=SCHEDULE_KB,
         )
 
     elif d == "cs_light":
