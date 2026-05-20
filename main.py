@@ -76,9 +76,11 @@ async def keyboard_router(update: Update, context):
 
 
 async def unknown_handler(update: Update, context):
+    info = get_user_info(update.effective_user.id)
+
     await update.message.reply_text(
         "Невідома команда. Скористайтесь кнопками меню або /help.",
-        reply_markup=MAIN_KEYBOARD,
+        reply_markup=get_keyboard(info),
     )
 
 
