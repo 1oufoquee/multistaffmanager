@@ -2,7 +2,14 @@ import os
 import sys
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+)
+from bot.handlers.cinema_schedule import ...
 
 from bot.handlers.start import start_handler, MAIN_KEYBOARD, get_keyboard
 from bot.handlers.orders import orders_handler
@@ -11,6 +18,10 @@ from bot.handlers.staff import staff_handler
 from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 from bot.handlers.admin_panel import build_admin_panel
 from bot.firebase_client import is_authorized_user, get_user_info
+from bot.handlers.cinema_schedule import (
+    cinema_schedule_handler,
+    handle_schedule_callbacks,
+)
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -56,6 +67,8 @@ async def keyboard_router(update: Update, context):
         await staff_handler(update, context)
     elif text == "📊 Статистика":
         await stats_handler(update, context)
+    elif text == "🎬 Сеанси":
+        await cinema_schedule_handler(update, context)
     # "🍿 Списання" and "👑 Адмін-Панель" are handled by ConversationHandlers
 
 
@@ -83,6 +96,9 @@ def main():
     app.add_handler(CommandHandler("orders", orders_handler))
     app.add_handler(CommandHandler("staff",  staff_handler))
     app.add_handler(CommandHandler("stats",  stats_handler))
+    app.add_handler(
+        CallbackQueryHandler(handle_schedule_callbacks, pattern=r"^cs_")
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
 
