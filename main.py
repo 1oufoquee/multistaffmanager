@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from bot.parser.session_parser import parse_sessions
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -85,6 +86,8 @@ async def unknown_handler(update: Update, context):
 
 
 def main():
+    import asyncio
+    from bot.parser.session_parser import parse_sessions
     logger.info("=== Cinema Staff Bot starting ===")
     check_firebase_credentials()
     token = get_token()
@@ -107,8 +110,17 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
 
-    logger.info("Handlers registered. Starting polling — Bot is ready.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    logger.info("Handlers registered. Starting parser...")
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(parse_sessions())
+
+    logger.info("Starting polling — Bot is ready.")
+
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
