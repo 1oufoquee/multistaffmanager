@@ -3,12 +3,13 @@ import requests
 from bs4 import BeautifulSoup
 from firebase_admin import firestore
 
-db = firestore.client()
-
-URL = "ССЫЛКА_НА_РАСПИСАНИЕ"
+URL = "https://multiplex.ua/ru/cinema/kyiv/atmosphera"
 
 
 async def parse_sessions():
+
+    db = firestore.client()
+    
     while True:
         try:
             response = requests.get(URL)
