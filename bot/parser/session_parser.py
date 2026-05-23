@@ -1,9 +1,10 @@
 import asyncio
-import requests
 from bs4 import BeautifulSoup
 
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+from playwright.async_api import async_playwright
 
 import json
 import os
@@ -14,7 +15,7 @@ URL = "https://multiplex.ua/ru/cinema/kyiv/atmosphera"
 
 async def parse_sessions():
 
-    # 🔥 Firebase init
+    # Firebase init
     if not firebase_admin._apps:
 
         cred_dict = json.loads(
@@ -31,23 +32,29 @@ async def parse_sessions():
 
         try:
 
-            print("Loading sessions page...")
+            print("Launching browser...")
 
-            response = requests.get(
-                URL,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0 Safari/537.36"
-                    )
-                },
-                timeout=30,
-            )
+            async with async_playwright() as p:
 
-            print("Status code:", response.status_code)
+                browser = await p.chromium.launch(
+                    headless=True
+                )
 
-            soup = BeautifulSoup(response.text, "html.parser")
+                page = await browser.new_page()
+
+                await page.goto(URL)
+
+                # ждём загрузку сеансов
+                await page.wait_for_selector(
+                    "div.ns",
+                    timeout=15000
+                )
+
+                html = await page.content()
+
+                await browser.close()
+
+            soup = BeautifulSoup(html, "html.parser")
 
             sessions = soup.find_all("div", class_="ns")
 
