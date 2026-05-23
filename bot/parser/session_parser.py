@@ -16,6 +16,7 @@ async def parse_sessions():
             soup = BeautifulSoup(response.text, "html.parser")
 
             sessions = soup.find_all("div", class_="ns")
+            print("FOUND SESSIONS:", len(sessions))
 
             for session in sessions:
                 movie = session.get("data-name", "Unknown")
