@@ -1,5 +1,8 @@
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.11"
+
 [phases.setup]
-nixPkgs = ["python311", "nodejs", "chromium"]
+nixPkgs = ["python311", "nodejs"]
 
 [phases.install]
 cmds = [
