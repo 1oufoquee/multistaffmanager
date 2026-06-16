@@ -27,14 +27,11 @@ from bot.firebase_client import (
 
 logger = logging.getLogger(__name__)
 
-# Kyiv is UTC+3 in summer (EEST) / UTC+2 in winter (EET)
-# We use a fixed UTC+3 offset which covers the cinema operating season.
-# Switch to pytz / zoneinfo if sub-hour DST precision is ever required.
+# Kyiv time: UTC+3 in summer (EEST). Covers the cinema operating season.
 _KYIV_TZ = timezone(td(hours=3))
 
 
 def _now_kyiv() -> datetime:
-    """Current datetime in Kyiv time."""
     return datetime.now(tz=_KYIV_TZ)
 
 
@@ -50,7 +47,7 @@ SCHEDULE_KB = _kb(
     [_btn("📋 Сьогодні",          "cs_today"),
      _btn("📋 Завтра",            "cs_tomorrow")],
     [_btn("🎞 Найближчий сеанс",  "cs_next")],
-    [_btn("💡 Нагадування світла","cs_light")],
+    [_btn("💡 Нагадування світла", "cs_light")],
 )
 
 # ── Cinema display names ──────────────────────────────────────────────────────
@@ -64,35 +61,50 @@ def _cinema_label(cinema: str) -> str:
     return CINEMA_LABELS.get(cinema, cinema.title())
 
 
+# ── Hall label translation ────────────────────────────────────────────────────
+
+_HALL_LABELS: dict[str, str] = {
+    "VIP":      "VIP зал",
+    "LUX":      "LUX зал",
+    "STANDART": "Стандарт",
+}
+
+def _hall_label(hall: str) -> str:
+    if not hall or hall in ("—", ""):
+        return ""
+    return _HALL_LABELS.get(hall.upper(), hall)
+
+
 # ── Formatting helpers ────────────────────────────────────────────────────────
 
-def _fmt_session_line(s: dict) -> str:
-    movie  = s.get("movieTitle", "—")
-    time   = s.get("sessionTime", "—")
-    fmt    = s.get("format", "")
-    hall   = s.get("hall", "")
-    parts  = [f"⏰ {time} — {movie}"]
-    extras = []
-    if fmt and fmt not in ("—", "2D", ""):
-        extras.append(fmt)
-    if hall and hall not in ("—", ""):
-        extras.append(hall)
-    if extras:
-        parts.append(f"({', '.join(extras)})")
-    return " ".join(parts)
+def _fmt_session_block(s: dict) -> str:
+    """
+    Format one session as a multi-line block:
+        ⏰ 13:00 — Minecraft (3D)
+        🏛 VIP зал
+    When hall is empty, just one line.
+    """
+    movie   = s.get("movieTitle", "—")
+    time    = s.get("sessionTime", "—")
+    fmt     = s.get("format", "")
+    hall    = _hall_label(s.get("hall", ""))
+
+    fmt_suffix = f" ({fmt})" if fmt and fmt not in ("2D", "—", "") else ""
+    first_line = f"⏰ {time} — {movie}{fmt_suffix}"
+
+    if hall:
+        return f"{first_line}\n🏛 {hall}"
+    return first_line
 
 
 def _upcoming(sessions: list[dict], now: datetime | None = None) -> list[dict]:
-    """
-    Keep only sessions that haven't started yet.
-    Compares session time against Kyiv local time.
-    """
+    """Keep only sessions that haven't started yet (Kyiv time)."""
     if now is None:
         now = _now_kyiv()
     now_str = now.strftime("%H:%M")
-    logger.debug("_upcoming: Kyiv time=%s, total sessions=%d", now_str, len(sessions))
+    logger.debug("_upcoming: Kyiv=%s total=%d", now_str, len(sessions))
     result = [s for s in sessions if (s.get("sessionTime") or "00:00") >= now_str]
-    logger.debug("_upcoming: sessions after time filter=%d", len(result))
+    logger.debug("_upcoming: after filter=%d", len(result))
     return result
 
 
@@ -102,9 +114,17 @@ def _format_day_block(sessions: list[dict], heading: str, upcoming_only: bool = 
     if not items:
         msg = "Немає сеансів." if not upcoming_only else "Всі сеанси вже завершились."
         return f"{heading}\n_{msg}_"
+
     lines = [heading, ""]
     for s in items:
-        lines.append(_fmt_session_line(s))
+        block = _fmt_session_block(s)
+        lines.append(block)
+        lines.append("")          # blank line between sessions
+
+    # Remove trailing blank line
+    if lines and lines[-1] == "":
+        lines.pop()
+
     return "\n".join(lines)
 
 
@@ -121,10 +141,11 @@ async def cinema_schedule_handler(update: Update, context: ContextTypes.DEFAULT_
     now    = _now_kyiv()
     today  = now.date()
 
-    # Debug: count total sessions in Firestore for today
     today_sessions = get_sessions(cinema, today.strftime("%Y-%m-%d"))
-    logger.info("[schedule] User %d opened schedule | cinema=%s | Kyiv time=%s | today sessions in DB=%d",
-                tid, cinema, now.strftime("%Y-%m-%d %H:%M"), len(today_sessions))
+    logger.info(
+        "[schedule] User %d opened schedule | cinema=%s | Kyiv=%s | today sessions=%d",
+        tid, cinema, now.strftime("%Y-%m-%d %H:%M"), len(today_sessions),
+    )
 
     await update.message.reply_text(
         f"🎬 *Сеанси — {label}*\n\nОберіть день або перегляньте найближчий сеанс:",
@@ -149,9 +170,8 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
 
     if d == "cs_today":
         sessions = get_sessions(cinema, today.strftime("%Y-%m-%d"))
-        logger.info("[schedule_cb] cs_today: loaded %d session(s) from Firestore", len(sessions))
-        upcoming = _upcoming(sessions, now)
-        logger.info("[schedule_cb] cs_today: %d upcoming after %s Kyiv", len(upcoming), now.strftime("%H:%M"))
+        logger.info("[cs_today] loaded=%d from Firestore, Kyiv=%s", len(sessions), now.strftime("%H:%M"))
+        logger.info("[cs_today] upcoming=%d", len(_upcoming(sessions, now)))
         text = _format_day_block(
             sessions,
             f"🎬 *{label} — Сьогодні {today.strftime('%d.%m')}*",
@@ -162,7 +182,7 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
     elif d == "cs_tomorrow":
         tomorrow = today + timedelta(days=1)
         sessions = get_sessions(cinema, tomorrow.strftime("%Y-%m-%d"))
-        logger.info("[schedule_cb] cs_tomorrow: loaded %d session(s)", len(sessions))
+        logger.info("[cs_tomorrow] loaded=%d", len(sessions))
         text = _format_day_block(
             sessions,
             f"🎬 *{label} — Завтра {tomorrow.strftime('%d.%m')}*",
@@ -173,7 +193,7 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
     elif d == "cs_next":
         sessions = get_sessions(cinema, today.strftime("%Y-%m-%d"))
         upcoming = _upcoming(sessions, now)
-        logger.info("[schedule_cb] cs_next: %d sessions today, %d upcoming", len(sessions), len(upcoming))
+        logger.info("[cs_next] today=%d upcoming=%d", len(sessions), len(upcoming))
 
         if not upcoming:
             await query.edit_message_text(
@@ -182,7 +202,9 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
             )
             return
 
-        nxt = upcoming[0]
+        nxt  = upcoming[0]
+        hall = _hall_label(nxt.get("hall", ""))
+        fmt  = nxt.get("format", "")
 
         # Minutes until session (Kyiv time)
         try:
@@ -190,20 +212,18 @@ async def handle_schedule_callbacks(update: Update, context: ContextTypes.DEFAUL
             sess_dt  = now.replace(hour=h, minute=m, second=0, microsecond=0)
             diff_sec = (sess_dt - now).total_seconds()
             mins     = max(0, int(diff_sec // 60))
-            time_str = f"⌛ Через: {mins} хв" if mins > 0 else "⌛ Починається зараз"
+            time_str = f"⌛ Через {mins} хв" if mins > 0 else "⌛ Починається зараз"
         except Exception as exc:
             logger.warning("Could not compute minutes to session: %s", exc)
             time_str = ""
 
-        fmt  = nxt.get("format", "")
-        hall = nxt.get("hall", "")
-        fmt_line  = f"\n🎟 {fmt}"  if fmt  and fmt  not in ("—", "2D", "") else ""
-        hall_line = f"\n🏛 {hall}" if hall and hall not in ("—", "")       else ""
+        fmt_line  = f"\n🎟 {fmt}"  if fmt  and fmt  not in ("2D", "—", "") else ""
+        hall_line = f"\n🏛 {hall}" if hall                                   else ""
 
         await query.edit_message_text(
             f"🎞 *Найближчий сеанс*\n\n"
             f"🎬 {nxt.get('movieTitle', '—')}\n"
-            f"🕐 {nxt.get('sessionTime', '—')}{fmt_line}{hall_line}\n"
+            f"🕐 {nxt.get('sessionTime', '—')}{fmt_line}{hall_line}\n\n"
             f"{time_str}",
             parse_mode="Markdown",
             reply_markup=SCHEDULE_KB,

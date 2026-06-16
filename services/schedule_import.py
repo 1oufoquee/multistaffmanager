@@ -87,8 +87,18 @@ def _parse_data_attributes(raw: str) -> list[dict]:
         return []
 
 
-def _extract_format(tag_text: str) -> str:
-    """Return detected video format from p.tag text; defaults to '2D'."""
+def _extract_format(tag_text: str, attrs: list[dict] | None = None) -> str:
+    """
+    Return detected video format. Priority:
+      1. data-attributes Typ=="format"  (most reliable — e.g. "3D")
+      2. p.tag text scan                (fallback for IMAX / 4DX / ScreenX)
+    Defaults to "2D".
+    """
+    for a in (attrs or []):
+        if a.get("Typ") == "format":
+            sn = a.get("ShortName", "").strip()
+            if sn:
+                return sn
     upper = tag_text.upper()
     for fmt in _KNOWN_FORMATS:
         if fmt in upper:
@@ -157,7 +167,7 @@ def _parse_html(html: str, cinema: str) -> list[dict]:
             raw_attrs = el.get("data-attributes", "")
             parsed_attrs = _parse_data_attributes(raw_attrs)
             hall   = _extract_hall(parsed_attrs)
-            fmt    = _extract_format(tag_str)
+            fmt    = _extract_format(tag_str, parsed_attrs)
 
             if not date_str:
                 logger.debug("Skipping session %s — bad anchor '%s'", sid, anchor)
