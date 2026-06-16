@@ -252,3 +252,61 @@ def update_menu_item(item_id: str, updates: dict) -> None:
 def delete_menu_item(item_id: str) -> None:
     db = get_db()
     _menu_ref(db).document(item_id).delete()
+
+
+# ── Sessions ──────────────────────────────────────────────────────────────────
+# Path: Cinema/{cinema}/Sessions/{doc_id}
+# The bot READS from here; services/schedule_import.py WRITES here.
+
+def _sessions_ref(db, cinema: str):
+    return db.collection("Cinema").document(cinema).collection("Sessions")
+
+
+def get_user_cinema(telegram_id: int) -> str:
+    """Return the cinema slug for this staff member. Falls back to 'atmosfera'."""
+    info = get_user_info(telegram_id)
+    return (info or {}).get("cinema", "atmosfera")
+
+
+def get_sessions(cinema: str, date_str: str | None = None) -> list[dict]:
+    """
+    Return sessions for *cinema*, optionally filtered to *date_str* (YYYY-MM-DD).
+    Sorted by sessionDate then sessionTime.
+    """
+    db      = get_db()
+    results = []
+    for doc in _sessions_ref(db, cinema).get():
+        data = doc.to_dict() or {}
+        data["_id"] = doc.id
+        if date_str and data.get("sessionDate") != date_str:
+            continue
+        results.append(data)
+    results.sort(key=lambda x: (x.get("sessionDate", ""), x.get("sessionTime", "")))
+    return results
+
+
+def save_session(cinema: str, data: dict) -> str:
+    """
+    Write one session document.
+    Uses sessionId as the document ID when present; otherwise auto-generates.
+    """
+    db   = get_db()
+    data = dict(data)
+    data["createdAt"] = firestore.SERVER_TIMESTAMP
+    sid  = data.pop("sessionId", None)
+    if sid:
+        _sessions_ref(db, cinema).document(str(sid)).set(data)
+        return str(sid)
+    _, doc_ref = _sessions_ref(db, cinema).add(data)
+    return doc_ref.id
+
+
+def clear_sessions(cinema: str) -> int:
+    """Delete all session documents for *cinema*. Returns count deleted."""
+    db    = get_db()
+    docs  = _sessions_ref(db, cinema).get()
+    count = 0
+    for doc in docs:
+        doc.reference.delete()
+        count += 1
+    return count

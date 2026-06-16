@@ -1,7 +1,7 @@
 import os
 import sys
 import logging
-from bot.parser.session_parser import parse_sessions
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,10 +10,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
-from bot.handlers.cinema_schedule import (
-    cinema_schedule_handler,
-    handle_schedule_callbacks,
-)
 
 from bot.handlers.start import start_handler, MAIN_KEYBOARD, get_keyboard
 from bot.handlers.orders import orders_handler
@@ -21,11 +17,11 @@ from bot.handlers.stats import stats_handler
 from bot.handlers.staff import staff_handler
 from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 from bot.handlers.admin_panel import build_admin_panel
-from bot.firebase_client import is_authorized_user, get_user_info
 from bot.handlers.cinema_schedule import (
     cinema_schedule_handler,
     handle_schedule_callbacks,
 )
+from bot.firebase_client import is_authorized_user, get_user_info
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -38,14 +34,14 @@ logger = logging.getLogger(__name__)
 def get_token() -> str:
     token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
-        logger.error("No bot token found. Set BOT_TOKEN environment variable.")
+        logger.error("No bot token found. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN.")
         sys.exit(1)
     return token
 
 
 def check_firebase_credentials():
     if not os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON"):
-        logger.error("FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set.")
+        logger.error("FIREBASE_SERVICE_ACCOUNT_JSON is not set.")
         sys.exit(1)
 
 
@@ -78,7 +74,6 @@ async def keyboard_router(update: Update, context):
 
 async def unknown_handler(update: Update, context):
     info = get_user_info(update.effective_user.id)
-
     await update.message.reply_text(
         "Невідома команда. Скористайтесь кнопками меню або /help.",
         reply_markup=get_keyboard(info),
@@ -86,41 +81,46 @@ async def unknown_handler(update: Update, context):
 
 
 def main():
-    import asyncio
-    from bot.parser.session_parser import parse_sessions
     logger.info("=== Cinema Staff Bot starting ===")
     check_firebase_credentials()
     token = get_token()
-    logger.info("Environment: OK — Building application...")
+    logger.info("Environment: OK — building application...")
 
     app = ApplicationBuilder().token(token).build()
 
-    # ConversationHandlers must be registered BEFORE the general text handler
+    # ── Background job: refresh session schedule every 15 minutes ─────────────
+    try:
+        from jobs.update_sessions import update_all_cinemas
+        app.job_queue.run_repeating(
+            update_all_cinemas,
+            interval=900,    # 15 minutes
+            first=60,        # initial delay after startup (seconds)
+            name="session_update",
+        )
+        logger.info("Session update job scheduled (interval=15 min, first=60 s)")
+    except Exception as exc:
+        logger.warning("Session update job NOT scheduled: %s", exc)
+
+    # ── ConversationHandlers — must be registered before the generic text handler
     app.add_handler(build_admin_panel())
     app.add_handler(build_writeoff_conversation())
 
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("help",  help_handler))
+    # ── Command handlers ──────────────────────────────────────────────────────
+    app.add_handler(CommandHandler("start",  start_handler))
+    app.add_handler(CommandHandler("help",   help_handler))
     app.add_handler(CommandHandler("orders", orders_handler))
     app.add_handler(CommandHandler("staff",  staff_handler))
     app.add_handler(CommandHandler("stats",  stats_handler))
-    app.add_handler(
-        CallbackQueryHandler(handle_schedule_callbacks, pattern=r"^cs_")
-    )
+
+    # ── Callback query handlers ───────────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(handle_schedule_callbacks, pattern=r"^cs_"))
+
+    # ── Keyboard / text handler ───────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
 
-    logger.info("Handlers registered. Starting parser...")
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(parse_sessions())
-
-    logger.info("Starting polling — Bot is ready.")
-
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    logger.info("Handlers registered. Starting polling — Bot is ready.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

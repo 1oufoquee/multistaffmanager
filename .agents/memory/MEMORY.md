@@ -1,0 +1,2 @@
+- [Session import architecture](session-import.md) — Multiplex→Firestore pipeline; bot reads sessions ONLY from Firestore, never scrapes directly.
+- [Auth type mismatch](auth-type-mismatch.md) — telegramId stored as float64 in Firestore; always compare with int() cast on both sides, never use .where("telegramId","==",tid).
