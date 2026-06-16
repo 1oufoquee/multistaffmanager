@@ -10,28 +10,23 @@ Data flow:
 
 To add a new cinema:
   Add an entry to CINEMA_URLS below — no other file needs changing.
-
-To override a URL at runtime:
-  Set env var MULTIPLEX_ATMOSFERA_URL=https://... etc.
 """
 
 import json
 import logging
 import os
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 import requests
 from bs4 import BeautifulSoup
 
-from bot.firebase_client import save_session, clear_sessions
+from bot.firebase_client import save_session, clear_stale_sessions
 
 logger = logging.getLogger(__name__)
 
 # ── Cinema URL map ────────────────────────────────────────────────────────────
-# key   = cinema slug used in Firestore ( Cinema/{slug}/Sessions )
-# value = Multiplex schedule page for that cinema (no date param needed —
-#         the page contains all upcoming days in one HTML load)
 
 CINEMA_URLS: dict[str, str] = {
     "atmosfera": os.getenv(
@@ -44,6 +39,8 @@ CINEMA_URLS: dict[str, str] = {
     ),
 }
 
+_MULTIPLEX_BASE = "https://multiplex.ua"
+
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,17 +51,24 @@ _HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-# Known video formats (checked against p.tag text, uppercase)
 _KNOWN_FORMATS = {"IMAX", "4DX", "3D", "SCREENX"}
 
+# Fallback duration (minutes) used when movie page cannot be fetched
+_DEFAULT_DURATION_MINS = 100
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+
+# ── Time helpers ──────────────────────────────────────────────────────────────
+
+def _add_minutes(time_str: str, mins: int) -> str:
+    """'14:30' + 95  →  '16:05'  (wraps past midnight)."""
+    h, m = map(int, time_str.split(":"))
+    dt = datetime(2000, 1, 1, h, m) + timedelta(minutes=mins)
+    return dt.strftime("%H:%M")
+
+
+# ── Multiplex HTML helpers ────────────────────────────────────────────────────
 
 def _anchor_to_date(anchor: str) -> str:
-    """
-    Convert Multiplex date anchor DDMMYYYY → ISO string YYYY-MM-DD.
-    Returns empty string on error.
-    """
     if not anchor or len(anchor) != 8 or not anchor.isdigit():
         return ""
     try:
@@ -74,13 +78,9 @@ def _anchor_to_date(anchor: str) -> str:
 
 
 def _parse_data_attributes(raw: str) -> list[dict]:
-    """
-    Parse the (slightly broken) JSON in data-attributes.
-    Multiplex sometimes trails the last item with ',]' — we fix that.
-    """
     if not raw:
         return []
-    cleaned = re.sub(r",\s*\]", "]", raw)   # remove trailing comma before ]
+    cleaned = re.sub(r",\s*\]", "]", raw)
     try:
         return json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
@@ -88,12 +88,6 @@ def _parse_data_attributes(raw: str) -> list[dict]:
 
 
 def _extract_format(tag_text: str, attrs: list[dict] | None = None) -> str:
-    """
-    Return detected video format. Priority:
-      1. data-attributes Typ=="format"  (most reliable — e.g. "3D")
-      2. p.tag text scan                (fallback for IMAX / 4DX / ScreenX)
-    Defaults to "2D".
-    """
     for a in (attrs or []):
         if a.get("Typ") == "format":
             sn = a.get("ShortName", "").strip()
@@ -106,18 +100,80 @@ def _extract_format(tag_text: str, attrs: list[dict] | None = None) -> str:
     return "2D"
 
 
-def _extract_hall(attrs: list[dict]) -> str:
-    """Return hall short-name from parsed data-attributes, or ''."""
+def _extract_hall(attrs: list[dict]) -> tuple[str, int | None]:
+    """Return (shortName, hallId) from data-attributes, or ('', None)."""
     for a in attrs:
         if a.get("Typ") == "hall":
-            return a.get("ShortName", "")
-    return ""
+            return a.get("ShortName", ""), a.get("Id")
+    return "", None
+
+
+# ── Duration fetching ─────────────────────────────────────────────────────────
+
+def _parse_duration_mins(html: str) -> int | None:
+    """
+    Extract movie runtime from Multiplex movie page HTML.
+    The page embeds JSON with  "duration": "H:MM"  (e.g. "1:35" = 95 min).
+    """
+    m = re.search(r'"duration"\s*:\s*"(\d+):(\d{2})"', html)
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+    return None
+
+
+def _fetch_duration_for_href(movie_href: str) -> int | None:
+    """Fetch one Multiplex movie page and return runtime in minutes."""
+    url = f"{_MULTIPLEX_BASE}{movie_href}"
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=10)
+        if resp.status_code == 200:
+            mins = _parse_duration_mins(resp.text)
+            if mins:
+                logger.debug("Duration %s → %d min", movie_href, mins)
+                return mins
+    except Exception as exc:
+        logger.debug("Duration fetch failed for %s: %s", movie_href, exc)
+    return None
+
+
+def _enrich_with_durations(sessions: list[dict]) -> None:
+    """
+    Fetch movie pages for each unique movieHref, extract duration,
+    and add endTime + durationMins to each session (in-place).
+
+    Caches by href so each movie page is fetched only once.
+    Sequential with a small delay to be polite to Multiplex servers.
+    """
+    hrefs: set[str] = {s["movieHref"] for s in sessions if s.get("movieHref")}
+    logger.info("Fetching durations for %d unique movie(s)...", len(hrefs))
+
+    cache: dict[str, int | None] = {}
+    for href in hrefs:
+        cache[href] = _fetch_duration_for_href(href)
+        time.sleep(0.25)   # gentle rate limiting
+
+    missing = sum(1 for v in cache.values() if v is None)
+    if missing:
+        logger.info(
+            "Duration fetch: %d/%d successful, %d fallback to %d min",
+            len(hrefs) - missing, len(hrefs), missing, _DEFAULT_DURATION_MINS,
+        )
+
+    for s in sessions:
+        href  = s.get("movieHref", "")
+        mins  = cache.get(href) or _DEFAULT_DURATION_MINS
+        start = s.get("sessionTime", "")
+        if start:
+            s["durationMins"] = mins
+            s["endTime"]      = _add_minutes(start, mins)
+        else:
+            s["durationMins"] = None
+            s["endTime"]      = None
 
 
 # ── Fetch & parse ─────────────────────────────────────────────────────────────
 
 def _fetch_html(url: str) -> str:
-    """Fetch the Multiplex cinema page (plain HTTP — no headless browser needed)."""
     logger.info("HTTP GET %s", url)
     resp = requests.get(url, headers=_HEADERS, timeout=25)
     logger.info("Response: %d  len=%d  content-type=%s",
@@ -128,18 +184,6 @@ def _fetch_html(url: str) -> str:
 
 
 def _parse_html(html: str, cinema: str) -> list[dict]:
-    """
-    Parse all session blocks from the Multiplex cinema page HTML.
-
-    Key selectors (verified 2026-06-16):
-      • Sessions are  <a class="ns ...">  elements (NOT div.ns)
-      • data-session-id  = numeric session ID
-      • data-name        = movie title
-      • data-anchor      = date in DDMMYYYY format
-      • data-attributes  = JSON array with hall/lang/format info
-      • p.time > span    = time string e.g. "13:00"
-      • p.tag            = space-separated tags e.g. "SDH VIP" or "IMAX 3D"
-    """
     soup     = BeautifulSoup(html, "lxml")
     elements = soup.select("a.ns")
     logger.info("[%s] Found %d a.ns elements in HTML", cinema, len(elements))
@@ -149,9 +193,10 @@ def _parse_html(html: str, cinema: str) -> list[dict]:
 
     for el in elements:
         try:
-            movie  = (el.get("data-name") or "").strip()
-            sid    = (el.get("data-session-id") or "").strip()
-            anchor = (el.get("data-anchor") or "").strip()
+            movie      = (el.get("data-name") or "").strip()
+            sid        = (el.get("data-session-id") or "").strip()
+            anchor     = (el.get("data-anchor") or "").strip()
+            movie_href = (el.get("data-moviehref") or "").strip()
 
             time_el = el.select_one("p.time span")
             tag_el  = el.select_one("p.tag")
@@ -164,63 +209,56 @@ def _parse_html(html: str, cinema: str) -> list[dict]:
             tag_str  = tag_el.get_text(strip=True) if tag_el else ""
             date_str = _anchor_to_date(anchor)
 
-            raw_attrs = el.get("data-attributes", "")
-            parsed_attrs = _parse_data_attributes(raw_attrs)
-            hall   = _extract_hall(parsed_attrs)
-            fmt    = _extract_format(tag_str, parsed_attrs)
-
             if not date_str:
                 logger.debug("Skipping session %s — bad anchor '%s'", sid, anchor)
                 skipped += 1
                 continue
 
+            raw_attrs    = el.get("data-attributes", "")
+            parsed_attrs = _parse_data_attributes(raw_attrs)
+            hall, hall_id = _extract_hall(parsed_attrs)
+            fmt           = _extract_format(tag_str, parsed_attrs)
+
             sessions.append({
                 "sessionId":   sid,
                 "movieTitle":  movie,
+                "movieHref":   movie_href,
                 "sessionDate": date_str,
                 "sessionTime": time_str,
                 "hall":        hall,
+                "hallId":      hall_id,
                 "format":      fmt,
                 "tags":        tag_str,
                 "cinema":      cinema,
+                # endTime and durationMins filled in by _enrich_with_durations()
             })
         except Exception as exc:
             logger.warning("[%s] Parse error on session element: %s", cinema, exc)
             skipped += 1
 
     logger.info("[%s] Parsed %d session(s), skipped %d", cinema, len(sessions), skipped)
-
-    # Print first 5 for quick verification
     for s in sessions[:5]:
         logger.info("  SAMPLE → %s | %s %s | hall=%s fmt=%s",
                     s["sessionDate"], s["sessionTime"], s["movieTitle"],
                     s["hall"], s["format"])
-
     return sessions
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def fetch_sessions_for_cinema(cinema: str) -> list[dict]:
-    """
-    Fetch and parse all upcoming sessions for *cinema* from Multiplex.
-    The page contains today + several future days — all are returned.
-    """
     base = CINEMA_URLS.get(cinema)
     if not base:
         logger.error("No Multiplex URL configured for cinema '%s'", cinema)
         return []
-
     try:
         html = _fetch_html(base)
     except Exception as exc:
         logger.error("[%s] HTTP fetch failed: %s", cinema, exc, exc_info=True)
         return []
-
     return _parse_html(html, cinema)
 
 
-# kept for backward compatibility with any code that still calls this
 async def fetch_sessions_for_date(cinema: str, target) -> list[dict]:
     """Deprecated — use fetch_sessions_for_cinema() instead."""
     all_sessions = await fetch_sessions_for_cinema(cinema)
@@ -228,29 +266,39 @@ async def fetch_sessions_for_date(cinema: str, target) -> list[dict]:
     return [s for s in all_sessions if s.get("sessionDate") == date_str]
 
 
-async def import_cinema(cinema: str, days_ahead: int = 2) -> int:
+async def import_cinema(cinema: str) -> int:
     """
     Full schedule refresh for *cinema*:
-      1. Delete all existing sessions from Firestore.
-      2. Fetch all upcoming sessions (single HTTP request).
-      3. Save every parsed session to Firestore.
+      1. Fetch all sessions from Multiplex (one HTTP request).
+      2. Enrich with end times (one HTTP request per unique movie).
+      3. Delete sessions no longer on Multiplex (stale).
+      4. Upsert all sessions to Firestore (merge=True preserves notification flags).
 
-    Returns total number of sessions written.
+    Returns total number of sessions upserted.
     """
     logger.info("[%s] Starting import...", cinema)
 
-    # Step 1 — clear stale data
-    try:
-        deleted = clear_sessions(cinema)
-        logger.info("[%s] Cleared %d stale session(s)", cinema, deleted)
-    except Exception as exc:
-        logger.error("[%s] clear_sessions failed: %s", cinema, exc)
-
-    # Step 2 — fetch all sessions in one request
+    # Step 1 — fetch sessions from Multiplex
     sessions = await fetch_sessions_for_cinema(cinema)
-    logger.info("[%s] Total sessions fetched: %d", cinema, len(sessions))
+    logger.info("[%s] Total sessions from Multiplex: %d", cinema, len(sessions))
 
-    # Step 3 — persist to Firestore
+    if not sessions:
+        logger.warning("[%s] No sessions returned — skipping Firestore update", cinema)
+        return 0
+
+    # Step 2 — enrich with end times
+    _enrich_with_durations(sessions)
+
+    # Step 3 — delete stale sessions (not in new data)
+    new_ids = {s["sessionId"] for s in sessions if s.get("sessionId")}
+    try:
+        deleted = clear_stale_sessions(cinema, keep_ids=new_ids)
+        if deleted:
+            logger.info("[%s] Deleted %d stale session(s)", cinema, deleted)
+    except Exception as exc:
+        logger.error("[%s] clear_stale_sessions failed: %s", cinema, exc)
+
+    # Step 4 — upsert to Firestore (preserves startNotifSent / endNotifSent flags)
     total_written = 0
     for sess in sessions:
         try:

@@ -43,8 +43,6 @@ def _menu_ref(db):
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
-# Firestore may store telegramId as float64 — compare as int on the Python side.
-# Blocked users are denied access regardless of telegramId match.
 
 def _find_user_doc(telegram_id: int):
     """Returns (doc_snapshot, dict) or (None, None). Always fetches fresh."""
@@ -113,6 +111,31 @@ def get_admin_users() -> list[dict]:
     return result
 
 
+def get_cinema_staff_tids(cinema: str) -> list[int]:
+    """
+    Return Telegram IDs of all active (non-blocked) staff for *cinema*.
+    All user docs live under Cinema/atmosfera/Users; the 'cinema' field
+    on each doc indicates which cinema the staff member works at.
+    Users without a 'cinema' field default to 'atmosfera'.
+    """
+    db = get_db()
+    result = []
+    for doc in _users_ref(db).get():
+        data = doc.to_dict() or {}
+        if data.get("isBlocked"):
+            continue
+        user_cinema = data.get("cinema", "atmosfera")
+        if user_cinema != cinema:
+            continue
+        tid = data.get("telegramId")
+        if tid is not None:
+            try:
+                result.append(int(tid))
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
 def add_staff_user(data: dict) -> str:
     db = get_db()
     _, doc_ref = _users_ref(db).add(data)
@@ -153,17 +176,14 @@ def get_statistics() -> dict:
         except Exception:
             continue
 
-        # Only today's orders
         if order_date != today:
             continue
 
         total_orders += 1
-
         status = data.get("status", "")
 
         if status == "active":
             active += 1
-
         elif status == "closed":
             completed += 1
             total_revenue += float(data.get("total", 0) or 0)
@@ -255,7 +275,7 @@ def delete_menu_item(item_id: str) -> None:
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
-# Path: Cinema/{cinema}/Sessions/{doc_id}
+# Path: Cinema/{cinema}/Sessions/{sessionId}
 # The bot READS from here; services/schedule_import.py WRITES here.
 
 def _sessions_ref(db, cinema: str):
@@ -287,22 +307,46 @@ def get_sessions(cinema: str, date_str: str | None = None) -> list[dict]:
 
 def save_session(cinema: str, data: dict) -> str:
     """
-    Write one session document.
-    Uses sessionId as the document ID when present; otherwise auto-generates.
+    Upsert one session document using merge=True.
+
+    merge=True means:
+      • On first write  → creates the document with all provided fields.
+      • On re-import    → updates schedule fields (movieTitle, endTime, …)
+                          but PRESERVES existing fields NOT in data
+                          (startNotifSent, endNotifSent keep their values).
+
+    This prevents duplicate light notifications when the 15-min import runs
+    right after a notification was sent.
     """
     db   = get_db()
     data = dict(data)
-    data["createdAt"] = firestore.SERVER_TIMESTAMP
+    data["updatedAt"] = firestore.SERVER_TIMESTAMP
     sid  = data.pop("sessionId", None)
     if sid:
-        _sessions_ref(db, cinema).document(str(sid)).set(data)
+        _sessions_ref(db, cinema).document(str(sid)).set(data, merge=True)
         return str(sid)
     _, doc_ref = _sessions_ref(db, cinema).add(data)
     return doc_ref.id
 
 
+def clear_stale_sessions(cinema: str, keep_ids: set) -> int:
+    """
+    Delete session documents whose ID is NOT in keep_ids.
+    Called during import to remove sessions that disappeared from Multiplex.
+    Returns count deleted.
+    """
+    db    = get_db()
+    docs  = _sessions_ref(db, cinema).get()
+    count = 0
+    for doc in docs:
+        if doc.id not in keep_ids:
+            doc.reference.delete()
+            count += 1
+    return count
+
+
 def clear_sessions(cinema: str) -> int:
-    """Delete all session documents for *cinema*. Returns count deleted."""
+    """Delete ALL session documents for *cinema*. Returns count deleted."""
     db    = get_db()
     docs  = _sessions_ref(db, cinema).get()
     count = 0
@@ -310,3 +354,22 @@ def clear_sessions(cinema: str) -> int:
         doc.reference.delete()
         count += 1
     return count
+
+
+def mark_session_notification_sent(cinema: str, session_id: str, field: str) -> None:
+    """
+    Persist a notification flag on a session document.
+
+    field should be 'startNotifSent' or 'endNotifSent'.
+    The flag survives subsequent imports because save_session uses merge=True
+    and does not include these fields in the import payload.
+    """
+    db = get_db()
+    try:
+        _sessions_ref(db, cinema).document(session_id).update({field: True})
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "mark_session_notification_sent failed [%s/%s/%s]: %s",
+            cinema, session_id, field, exc,
+        )

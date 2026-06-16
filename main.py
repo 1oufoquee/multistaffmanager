@@ -93,13 +93,29 @@ def main():
         from jobs.update_sessions import update_all_cinemas
         app.job_queue.run_repeating(
             update_all_cinemas,
-            interval=900,    # 15 minutes
-            first=60,        # initial delay after startup (seconds)
+            interval=900,
+            first=60,
             name="session_update",
         )
         logger.info("Session update job scheduled (interval=15 min, first=60 s)")
     except Exception as exc:
         logger.warning("Session update job NOT scheduled: %s", exc)
+
+    # ── Background job: light notifications every 60 seconds ──────────────────
+    try:
+        from jobs.light_notifications import check_light_notifications, NOTIFY_HALL_NAMES, END_NOTIFY_MINUTES
+        app.job_queue.run_repeating(
+            check_light_notifications,
+            interval=60,
+            first=30,
+            name="light_notifications",
+        )
+        logger.info(
+            "Light notification job scheduled (interval=60 s, halls=%s, end_warn=%d min)",
+            NOTIFY_HALL_NAMES, END_NOTIFY_MINUTES,
+        )
+    except Exception as exc:
+        logger.warning("Light notification job NOT scheduled: %s", exc)
 
     # ── ConversationHandlers — must be registered before the generic text handler
     app.add_handler(build_admin_panel())
