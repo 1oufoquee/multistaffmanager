@@ -24,6 +24,7 @@ from bot.firebase_client import (
     get_sessions,
     update_staff_user,
 )
+from bot.hall_config import hall_label as _hall_label
 
 logger = logging.getLogger(__name__)
 
@@ -59,20 +60,6 @@ CINEMA_LABELS: dict[str, str] = {
 
 def _cinema_label(cinema: str) -> str:
     return CINEMA_LABELS.get(cinema, cinema.title())
-
-
-# ── Hall label translation ────────────────────────────────────────────────────
-
-_HALL_LABELS: dict[str, str] = {
-    "VIP":      "VIP зал",
-    "LUX":      "LUX зал",
-    "STANDART": "Стандарт",
-}
-
-def _hall_label(hall: str) -> str:
-    if not hall or hall in ("—", ""):
-        return ""
-    return _HALL_LABELS.get(hall.upper(), hall)
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────

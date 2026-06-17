@@ -103,7 +103,8 @@ def main():
 
     # ── Background job: light notifications every 60 seconds ──────────────────
     try:
-        from jobs.light_notifications import check_light_notifications, NOTIFY_HALL_NAMES, END_NOTIFY_MINUTES
+        from jobs.light_notifications import check_light_notifications
+        from bot.hall_config import NOTIFY_HALLS, END_NOTIFY_MINUTES
         app.job_queue.run_repeating(
             check_light_notifications,
             interval=60,
@@ -112,7 +113,7 @@ def main():
         )
         logger.info(
             "Light notification job scheduled (interval=60 s, halls=%s, end_warn=%d min)",
-            NOTIFY_HALL_NAMES, END_NOTIFY_MINUTES,
+            NOTIFY_HALLS, END_NOTIFY_MINUTES,
         )
     except Exception as exc:
         logger.warning("Light notification job NOT scheduled: %s", exc)
