@@ -1,0 +1,183 @@
+TASK: Reuse and integrate the existing Multiplex parser already present in the repository. Search the entire project for any code related to Multiplex, cinema schedule parsing, session parsing, Atmosfera, movie schedules, or cinema timetable functionality. Do NOT create a completely separate scraper if working logic already exists. Refactor and extend the existing implementation.
+
+GOAL
+
+Automatically generate Atmosfera cinema schedule every day at 06:00 Kyiv time and save it to Firestore so the Unity application can consume it.
+
+FIRESTORE STRUCTURE
+
+Cinema/
+└ atmosfera/
+└ cinema_schedule/
+└ YYYY-MM-DD/
+└ sessions/
+└ SESSION_ID
+
+Example:
+
+Cinema/atmosfera/cinema_schedule/2026-06-21/sessions/98102
+
+Document format:
+
+{
+"sessionId": "98102",
+"movie": "Історія іграшок 5",
+"hall": "Зал №1",
+"startTime": "2026-06-21T10:00:00+03:00",
+"endTime": "2026-06-21T11:42:00+03:00",
+"generatedAt": firestore.SERVER_TIMESTAMP
+}
+
+IMPLEMENTATION
+
+1. Inspect existing code first.
+
+Search the project for:
+
+* multiplex
+* schedule
+* cinema_schedule
+* atmosfera
+* session
+* movie
+* timetable
+
+Reuse existing parser logic whenever possible.
+
+2. Create or update:
+
+multiplex_schedule_parser.py
+
+3. Schedule generation workflow
+
+STEP 1
+
+Open:
+
+https://multiplex.ua/ru/cinema/kyiv/atmosphera
+
+STEP 2
+
+Extract all available session IDs.
+
+Previously verified pattern:
+
+session/98102
+session/98403
+session/98126
+
+Use regex:
+
+r"session/(\d+)"
+
+Collect unique session IDs.
+
+STEP 3
+
+For every discovered session:
+
+Open the corresponding session page and extract:
+
+* movie title
+* hall number
+* session start time
+* session end time
+
+Previously verified fields exist inside Multiplex page source:
+
+SessionShowTime
+SessionShowTimeEnd
+SessionScreenName
+
+Example:
+
+{
+"SessionShowTime":"2026-06-21T10:00:00+03:00",
+"SessionShowTimeEnd":"2026-06-21T11:42:00+03:00",
+"SessionScreenName":"Зал №1"
+}
+
+Movie title can be extracted from:
+
+.movie-name.mobile-hidden
+
+or
+
+.movie-name.desktop-hidden
+
+or embedded JSON data.
+
+STEP 4
+
+Determine schedule date from SessionShowTime.
+
+Create:
+
+Cinema/atmosfera/cinema_schedule/YYYY-MM-DD/sessions/SESSION_ID
+
+STEP 5
+
+Before saving new schedule for a date:
+
+* remove old session documents for that date
+* regenerate all sessions
+* write fresh data
+
+SCHEDULER
+
+Add automatic execution every day at:
+
+06:00 Europe/Kyiv
+
+Function:
+
+generate_daily_schedule()
+
+Pseudo flow:
+
+generate_daily_schedule()
+-> parse all Multiplex sessions
+-> collect movie/hall/start/end data
+-> rebuild Firestore schedule
+-> log results
+
+BOT INTEGRATION
+
+Register scheduler during bot startup.
+
+Bot must continue operating normally.
+
+The parser should run in the background and must not block Telegram bot functionality.
+
+ERROR HANDLING
+
+* Skip broken sessions
+* Log parsing errors
+* Continue processing remaining sessions
+* Never crash the bot
+* If one session fails, schedule generation must continue
+
+LOGGING
+
+Add logs:
+
+[Schedule] Found X sessions
+[Schedule] Processing session XXXXX
+[Schedule] Saved session XXXXX
+[Schedule] Schedule generation complete
+
+FINAL RESULT
+
+Every morning Firestore must automatically contain the complete Atmosfera schedule for the current day including:
+
+* movie title
+* hall number
+* start time
+* end time
+* sessionId
+
+No manual document creation should be required.
+
+IMPORTANT
+
+Prefer extending existing Multiplex-related code already present in the repository rather than building a new implementation from scratch. If an old schedule parser exists, integrate it into the new daily schedule generation system.

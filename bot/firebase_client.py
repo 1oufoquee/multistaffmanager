@@ -356,6 +356,57 @@ def clear_sessions(cinema: str) -> int:
     return count
 
 
+# ── cinema_schedule collection (used by Unity / external consumers) ───────────
+#
+#  Path: Cinema/{cinema}/cinema_schedule/{date}/sessions/{sessionId}
+#
+#  Document format:
+#    { sessionId, movie, hall, startTime (ISO 8601), endTime (ISO 8601),
+#      generatedAt: SERVER_TIMESTAMP }
+
+def _schedule_sessions_ref(db, cinema: str, date_str: str):
+    return (
+        db.collection("Cinema")
+          .document(cinema)
+          .collection("cinema_schedule")
+          .document(date_str)
+          .collection("sessions")
+    )
+
+
+def save_schedule_session(cinema: str, date_str: str, data: dict) -> str:
+    """
+    Write one session document to the cinema_schedule subcollection.
+    Uses set() (full overwrite) — the daily job clears old docs first.
+    """
+    db   = get_db()
+    data = dict(data)
+    data["generatedAt"] = firestore.SERVER_TIMESTAMP
+    sid  = data.get("sessionId")
+    ref  = _schedule_sessions_ref(db, cinema, date_str)
+    if sid:
+        ref.document(str(sid)).set(data)
+        return str(sid)
+    _, doc_ref = ref.add(data)
+    return doc_ref.id
+
+
+def clear_schedule_sessions(cinema: str, date_str: str) -> int:
+    """
+    Delete all session documents for *cinema* on *date_str*.
+    Called before writing fresh data so removed sessions don't linger.
+    Returns count deleted.
+    """
+    db    = get_db()
+    ref   = _schedule_sessions_ref(db, cinema, date_str)
+    docs  = ref.get()
+    count = 0
+    for doc in docs:
+        doc.reference.delete()
+        count += 1
+    return count
+
+
 def mark_session_notification_sent(cinema: str, session_id: str, field: str) -> None:
     """
     Persist a notification flag on a session document.

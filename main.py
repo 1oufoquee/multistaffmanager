@@ -101,6 +101,22 @@ def main():
     except Exception as exc:
         logger.warning("Session update job NOT scheduled: %s", exc)
 
+    # ── Background job: daily cinema_schedule generation at 06:00 Kyiv ────────
+    try:
+        from datetime import time as dtime
+        from zoneinfo import ZoneInfo
+        from jobs.generate_daily_schedule import generate_daily_schedule_job
+
+        kyiv = ZoneInfo("Europe/Kiev")
+        app.job_queue.run_daily(
+            generate_daily_schedule_job,
+            time=dtime(hour=6, minute=0, tzinfo=kyiv),
+            name="daily_schedule",
+        )
+        logger.info("Daily schedule job scheduled (06:00 Europe/Kiev)")
+    except Exception as exc:
+        logger.warning("Daily schedule job NOT scheduled: %s", exc)
+
     # ── Background job: light notifications every 60 seconds ──────────────────
     try:
         from jobs.light_notifications import check_light_notifications
