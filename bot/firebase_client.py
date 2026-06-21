@@ -374,6 +374,42 @@ def _schedule_sessions_ref(db, cinema: str, date_str: str):
     )
 
 
+def get_schedule_sessions(cinema: str, date_str: str) -> list[dict]:
+    """
+    Return all sessions for *cinema* on *date_str* from the new
+    cinema_schedule subcollection, sorted by startTime.
+    """
+    db      = get_db()
+    ref     = _schedule_sessions_ref(db, cinema, date_str)
+    results = []
+    for doc in ref.get():
+        data = doc.to_dict() or {}
+        data["_id"] = doc.id
+        results.append(data)
+    results.sort(key=lambda x: x.get("startTime", ""))
+    return results
+
+
+def mark_schedule_session_notification_sent(
+    cinema: str, date_str: str, session_id: str, field: str
+) -> None:
+    """
+    Set a notification flag on a cinema_schedule session document.
+    field should be 'startNotifSent' or 'endNotifSent'.
+    """
+    db = get_db()
+    try:
+        _schedule_sessions_ref(db, cinema, date_str).document(str(session_id)).update(
+            {field: True}
+        )
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "mark_schedule_session_notification_sent failed [%s/%s/%s/%s]: %s",
+            cinema, date_str, session_id, field, exc,
+        )
+
+
 def save_schedule_session(cinema: str, date_str: str, data: dict) -> str:
     """
     Write one session document to the cinema_schedule subcollection.
