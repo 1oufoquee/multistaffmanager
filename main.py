@@ -7,20 +7,15 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
-from bot.handlers.start import start_handler, MAIN_KEYBOARD, get_keyboard
+from bot.handlers.start import start_handler, get_keyboard
 from bot.handlers.orders import orders_handler
 from bot.handlers.stats import stats_handler
 from bot.handlers.staff import staff_handler
 from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 from bot.handlers.admin_panel import build_admin_panel
-from bot.handlers.cinema_schedule import (
-    cinema_schedule_handler,
-    handle_schedule_callbacks,
-)
 from bot.firebase_client import is_authorized_user, get_user_info
 
 logging.basicConfig(
@@ -67,8 +62,6 @@ async def keyboard_router(update: Update, context):
         await staff_handler(update, context)
     elif text == "📊 Статистика":
         await stats_handler(update, context)
-    elif text == "🎬 Сеанси":
-        await cinema_schedule_handler(update, context)
     # "🍿 Списання" and "👑 Адмін-Панель" are handled by ConversationHandlers
 
 
@@ -88,53 +81,6 @@ def main():
 
     app = ApplicationBuilder().token(token).build()
 
-    # ── Background job: refresh session schedule every 15 minutes ─────────────
-    try:
-        from jobs.update_sessions import update_all_cinemas
-        app.job_queue.run_repeating(
-            update_all_cinemas,
-            interval=900,
-            first=60,
-            name="session_update",
-        )
-        logger.info("Session update job scheduled (interval=15 min, first=60 s)")
-    except Exception as exc:
-        logger.warning("Session update job NOT scheduled: %s", exc)
-
-    # ── Background job: daily cinema_schedule generation at 06:00 Kyiv ────────
-    try:
-        from datetime import time as dtime
-        from zoneinfo import ZoneInfo
-        from jobs.generate_daily_schedule import generate_daily_schedule_job
-
-        kyiv = ZoneInfo("Europe/Kiev")
-        app.job_queue.run_daily(
-            generate_daily_schedule_job,
-            time=dtime(hour=6, minute=0, tzinfo=kyiv),
-            name="daily_schedule",
-        )
-        logger.info("Daily schedule job scheduled (06:00 Europe/Kiev)")
-    except Exception as exc:
-        logger.warning("Daily schedule job NOT scheduled: %s", exc)
-
-    # ── Background job: light notifications every 60 seconds ──────────────────
-    try:
-        from jobs.light_notifications import check_light_notifications
-        from bot.hall_config import NOTIFY_SCHEDULE_HALLS, END_NOTIFY_MINUTES
-        app.job_queue.run_repeating(
-            check_light_notifications,
-            interval=60,
-            first=30,
-            name="light_notifications",
-        )
-        notify_desc = str(NOTIFY_SCHEDULE_HALLS) if NOTIFY_SCHEDULE_HALLS else "ALL"
-        logger.info(
-            "Light notification job scheduled (interval=60 s, notify_halls=%s, end_warn=%d min)",
-            notify_desc, END_NOTIFY_MINUTES,
-        )
-    except Exception as exc:
-        logger.warning("Light notification job NOT scheduled: %s", exc)
-
     # ── ConversationHandlers — must be registered before the generic text handler
     app.add_handler(build_admin_panel())
     app.add_handler(build_writeoff_conversation())
@@ -145,9 +91,6 @@ def main():
     app.add_handler(CommandHandler("orders", orders_handler))
     app.add_handler(CommandHandler("staff",  staff_handler))
     app.add_handler(CommandHandler("stats",  stats_handler))
-
-    # ── Callback query handlers ───────────────────────────────────────────────
-    app.add_handler(CallbackQueryHandler(handle_schedule_callbacks, pattern=r"^cs_"))
 
     # ── Keyboard / text handler ───────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))

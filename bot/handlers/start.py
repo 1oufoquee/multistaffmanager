@@ -8,7 +8,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
         [KeyboardButton("📊 Статистика"), KeyboardButton("🍿 Списання")],
-        [KeyboardButton("🎬 Сеанси")]
     ],
     resize_keyboard=True,
 )
@@ -18,7 +17,6 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
         [KeyboardButton("📊 Статистика"), KeyboardButton("🍿 Списання")],
         [KeyboardButton("👑 Адмін-Панель")],
-        [KeyboardButton("🎬 Сеанси")]
     ],
     resize_keyboard=True,
 )
