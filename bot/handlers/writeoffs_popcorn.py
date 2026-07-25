@@ -46,6 +46,7 @@ def _flavor_emoji(name: str) -> str:
     if "ікра" in n or "икра" in n:    return "🐟"
     if "карамель" in n:               return "🍯"
     if "сіль" in n or "соль" in n:    return "🧂"
+    if "полуниц" in n:                return "🍓"
     return "🍿"
 
 
