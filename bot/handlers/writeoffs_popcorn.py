@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 # ── Conversation states ──────────────────────────────────────────────────────
 WRITEOFF_MENU = 0   # admin-only: [Нове списання | Архів]
-FLAVOR_SELECT = 1   # pick a popcorn flavor from inline buttons
-WEIGHT_INPUT  = 2   # enter finished popcorn weight as text
-CONFIRMING    = 3   # review ingredient report → save or cancel
+FLAVOR_SELECT = 1   # pick a product from inline buttons
+WEIGHT_INPUT  = 2   # enter weight as text (popcorn or potato)
+CONFIRMING    = 3   # review report → save or cancel
 
 
 # ── Emoji helpers ─────────────────────────────────────────────────────────────
@@ -56,8 +56,14 @@ def _flavor_keyboard(
     recipes: list,
     has_entries: bool,
     entered_names: set | None = None,
+    has_potato: bool = False,
 ) -> InlineKeyboardMarkup:
-    """2-column inline keyboard. Already-entered flavors get a ✅ suffix."""
+    """
+    2-column inline keyboard for popcorn flavors.
+    Already-entered flavors get a ✅ suffix.
+    Potato wedges button always shown; ✅ when already entered.
+    Confirm button appears once at least one product has been added.
+    """
     entered_names = entered_names or set()
     rows = []
     row: list = []
@@ -71,7 +77,11 @@ def _flavor_keyboard(
     if row:
         rows.append(row)
 
-    if has_entries:
+    # Potato wedges — always visible, ✅ when already added this session
+    potato_label = "🥔 Картопляні спеки ✅" if has_potato else "🥔 Картопляні спеки"
+    rows.append([InlineKeyboardButton(potato_label, callback_data="wo_potato")])
+
+    if has_entries or has_potato:
         rows.append([InlineKeyboardButton("✅ Підтвердити списання", callback_data="wo_done")])
     rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="wo_cancel")])
     return InlineKeyboardMarkup(rows)
@@ -144,68 +154,44 @@ def _split_common_specific(flavor_entries: list) -> tuple[dict, dict]:
     return common, specific
 
 
-def _format_final_report(flavor_entries: list) -> str:
+def _format_final_report(flavor_entries: list, potato_kg: float = 0.0) -> str:
     """
-    Common ingredients (shared across 2+ flavors) summed at top.
-    Flavor-specific additives listed below, separated by a blank line.
+    Popcorn section: common ingredients summed at top, flavor-specific below.
+    Potato wedges section: appended as a single line after a blank separator.
     """
-    if not flavor_entries:
-        return "_Немає даних_"
-
-    common, specific = _split_common_specific(flavor_entries)
     lines: list[str] = []
 
-    for name, amount in common.items():
-        lines.append(f"{_ing_emoji(name)} {name} — {amount}")
+    if flavor_entries:
+        common, specific = _split_common_specific(flavor_entries)
 
-    if specific:
-        if common:
-            lines.append("")            # blank line separator
-        for name, amount in specific.items():
+        for name, amount in common.items():
             lines.append(f"{_ing_emoji(name)} {name} — {amount}")
 
-    return "\n".join(lines) if lines else "_Рецепти не містять інгредієнтів_"
+        if specific:
+            if common:
+                lines.append("")            # blank line separator
+            for name, amount in specific.items():
+                lines.append(f"{_ing_emoji(name)} {name} — {amount}")
+
+    if potato_kg > 0:
+        if lines:
+            lines.append("")               # blank line separator before potato
+        lines.append(f"🥔 Картопляні спеки — {potato_kg} кг")
+
+    if not lines:
+        return "_Немає даних_"
+
+    return "\n".join(lines)
 
 
 # ── Report formatting ─────────────────────────────────────────────────────────
 
-def _format_per_flavor_report(flavor_entries: list) -> str:
-    """
-    Each flavor gets its own section with its own ingredient breakdown.
-
-    🧀 Сир (3.5 кг)
-    • Кукурудза Weaver Gold — 1.470
-    • Масло кокосове — 0.490
-
-    🥓 Бекон (2 кг)
-    • Кукурудза Weaver Gold — 0.840
-    ...
-    """
-    if not flavor_entries:
-        return "_Немає даних_"
-
-    sections = []
-    for entry in flavor_entries:
-        name        = entry["name"]
-        weight      = entry["weight"]
-        ingredients = entry.get("ingredients", {})
-
-        header = f"{_flavor_emoji(name)} *{name}* ({weight} кг)"
-        if ingredients:
-            lines = [header]
-            for ing_name, amount in ingredients.items():
-                lines.append(f"• {ing_name} — {amount}")
-            sections.append("\n".join(lines))
-        else:
-            sections.append(f"{header}\n_рецепт без інгредієнтів_")
-
-    return "\n\n".join(sections)
-
-
-def _format_flavor_summary(flavor_entries: list) -> str:
-    if not flavor_entries:
-        return ""
+def _format_flavor_summary(flavor_entries: list, potato_kg: float = 0.0) -> str:
     parts = [f"{_flavor_emoji(e['name'])} {e['name']} {e['weight']} кг" for e in flavor_entries]
+    if potato_kg > 0:
+        parts.append(f"🥔 Картопляні спеки {potato_kg} кг")
+    if not parts:
+        return ""
     return "📝 " + " | ".join(parts)
 
 
@@ -256,7 +242,7 @@ async def handle_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return WRITEOFF_MENU
 
 
-# ── Flavor selection ──────────────────────────────────────────────────────────
+# ── Product selection ─────────────────────────────────────────────────────────
 
 async def _begin_flavor_select(
     context: ContextTypes.DEFAULT_TYPE,
@@ -289,12 +275,13 @@ async def _begin_flavor_select(
     context.user_data["recipes"]           = recipes
     context.user_data["flavor_entries"]    = []
     context.user_data["total_ingredients"] = {}
+    context.user_data["potato_wedges_kg"]  = 0.0
 
     await context.bot.send_message(
         chat_id=chat_id,
-        text="🍿 *Оберіть смак попкорну:*",
+        text="🍿 *Оберіть продукт для списання:*",
         parse_mode="Markdown",
-        reply_markup=_flavor_keyboard(recipes, has_entries=False),
+        reply_markup=_flavor_keyboard(recipes, has_entries=False, has_potato=False),
     )
     return FLAVOR_SELECT
 
@@ -311,6 +298,19 @@ async def handle_flavor_select(update: Update, context: ContextTypes.DEFAULT_TYP
     if query.data == "wo_done":
         return await _show_ingredient_summary(query, context)
 
+    # ── Картопляні спеки ─────────────────────────────────────────────────────
+    if query.data == "wo_potato":
+        context.user_data["pending_potato"] = True
+        await query.edit_message_text(
+            "🥔 *Картопляні спеки*\n\n"
+            "Введіть вагу списання (кг):\n"
+            "_Приклад: 2.5_\n\n"
+            "/cancel — скасувати",
+            parse_mode="Markdown",
+        )
+        return WEIGHT_INPUT
+
+    # ── Popcorn flavor ────────────────────────────────────────────────────────
     try:
         idx    = int(query.data[len("wo_f_"):])
         recipe = context.user_data["recipes"][idx]
@@ -319,6 +319,7 @@ async def handle_flavor_select(update: Update, context: ContextTypes.DEFAULT_TYP
         return FLAVOR_SELECT
 
     flavor_name = recipe.get("name") or recipe.get("_id", f"#{idx}")
+    context.user_data["pending_potato"]        = False
     context.user_data["current_flavor_name"]   = flavor_name
     context.user_data["current_flavor_recipe"] = recipe
 
@@ -349,11 +350,41 @@ async def receive_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return WEIGHT_INPUT
 
+    recipes        = context.user_data["recipes"]
+    flavor_entries = context.user_data["flavor_entries"]
+    potato_kg      = context.user_data.get("potato_wedges_kg", 0.0)
+
+    # ── Картопляні спеки branch — no recipe, no calculation ──────────────────
+    if context.user_data.get("pending_potato"):
+        context.user_data["potato_wedges_kg"] = weight
+        context.user_data["pending_potato"]   = False
+        potato_kg = weight
+
+        entered_names = {e["name"] for e in flavor_entries}
+        summary       = _format_flavor_summary(flavor_entries, potato_kg)
+
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ Додано: *Картопляні спеки* — {weight} кг\n\n"
+                f"{summary}\n\n"
+                f"Оберіть ще продукт або підтвердіть:"
+            ),
+            parse_mode="Markdown",
+            reply_markup=_flavor_keyboard(
+                recipes,
+                has_entries=bool(flavor_entries),
+                entered_names=entered_names,
+                has_potato=True,
+            ),
+        )
+        return FLAVOR_SELECT
+
+    # ── Popcorn branch — recipe calculation ───────────────────────────────────
     flavor_name = context.user_data["current_flavor_name"]
     recipe      = context.user_data["current_flavor_recipe"]
     ingredients = _calculate(recipe, weight)
 
-    # Store per-flavor entry WITH its own ingredient breakdown
     context.user_data["flavor_entries"].append({
         "name":        flavor_name,
         "weight":      weight,
@@ -363,32 +394,37 @@ async def receive_weight(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     flavor_entries = context.user_data["flavor_entries"]
     entered_names  = {e["name"] for e in flavor_entries}
-    recipes        = context.user_data["recipes"]
-    summary        = _format_flavor_summary(flavor_entries)
+    summary        = _format_flavor_summary(flavor_entries, potato_kg)
 
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
             f"✅ Додано: *{flavor_name}* — {weight} кг\n\n"
             f"{summary}\n\n"
-            f"Оберіть ще один смак або підтвердіть:"
+            f"Оберіть ще продукт або підтвердіть:"
         ),
         parse_mode="Markdown",
-        reply_markup=_flavor_keyboard(recipes, has_entries=True, entered_names=entered_names),
+        reply_markup=_flavor_keyboard(
+            recipes,
+            has_entries=True,
+            entered_names=entered_names,
+            has_potato=potato_kg > 0,
+        ),
     )
     return FLAVOR_SELECT
 
 
-# ── Ingredient summary before save ────────────────────────────────────────────
+# ── Summary before save ───────────────────────────────────────────────────────
 
 async def _show_ingredient_summary(query, context: ContextTypes.DEFAULT_TYPE) -> int:
     flavor_entries = context.user_data.get("flavor_entries", [])
+    potato_kg      = context.user_data.get("potato_wedges_kg", 0.0)
 
-    if not flavor_entries:
-        await query.answer("Додайте хоча б один смак!", show_alert=True)
+    if not flavor_entries and not potato_kg:
+        await query.answer("Додайте хоча б один продукт!", show_alert=True)
         return FLAVOR_SELECT
 
-    report = _format_final_report(flavor_entries)
+    report = _format_final_report(flavor_entries, potato_kg)
     text   = f"📋 *Звіт про списання*\n\n{report}"
 
     kb = InlineKeyboardMarkup([
@@ -417,26 +453,31 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     telegram_id       = context.user_data.get("telegram_id")
     flavor_entries    = context.user_data.get("flavor_entries", [])
     total_ingredients = context.user_data.get("total_ingredients", {})
+    potato_kg         = context.user_data.get("potato_wedges_kg", 0.0)
+
+    payload = {
+        "staffName":        staff_info.get("name", "—"),
+        "staffAppId":       staff_info.get("_id", "—"),
+        "telegramId":       telegram_id,
+        "items":            flavor_entries,
+        "totalIngredients": total_ingredients,
+    }
+    if potato_kg > 0:
+        payload["potato_wedges"] = potato_kg
 
     try:
-        doc_id = save_writeoff({
-            "staffName":        staff_info.get("name", "—"),
-            "staffAppId":       staff_info.get("_id", "—"),
-            "telegramId":       telegram_id,
-            "items":            flavor_entries,
-            "totalIngredients": total_ingredients,
-        })
+        doc_id = save_writeoff(payload)
     except Exception as e:
         await query.edit_message_text(f"❌ Помилка збереження: {e}")
         return ConversationHandler.END
 
-    report = _format_final_report(flavor_entries)
+    report = _format_final_report(flavor_entries, potato_kg)
     await query.edit_message_text(
         f"✅ *Списання збережено!*\n\n{report}\n\n`{doc_id}`",
         parse_mode="Markdown",
     )
 
-    await _notify_admins(context, staff_info, flavor_entries)
+    await _notify_admins(context, staff_info, flavor_entries, potato_kg)
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -445,6 +486,7 @@ async def _notify_admins(
     context: ContextTypes.DEFAULT_TYPE,
     staff_info: dict,
     flavor_entries: list,
+    potato_kg: float = 0.0,
 ):
     try:
         admins = get_admin_users()
@@ -453,7 +495,7 @@ async def _notify_admins(
         return
 
     staff_name = staff_info.get("name", "—")
-    report     = _format_final_report(flavor_entries)
+    report     = _format_final_report(flavor_entries, potato_kg)
 
     text = (
         f"🔔 Списання готове!\n\n"
@@ -489,6 +531,7 @@ async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
         created = format_timestamp(entry.get("createdAt"))
         staff   = entry.get("staffName", "—")
         items   = entry.get("items", [])
+        potato  = entry.get("potato_wedges", 0.0) or 0.0
 
         lines.append(f"🕐 {created}  👤 {staff}")
         for item in items:
@@ -500,6 +543,8 @@ async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"{_flavor_emoji(flavor_name)} {flavor_name} ({weight} кг)")
             for ing_name, amount in ingredients.items():
                 lines.append(f"  • {ing_name} — {amount}")
+        if potato > 0:
+            lines.append(f"🥔 Картопляні спеки — {potato} кг")
         lines.append("─────────────")
 
     text = "\n".join(lines)
@@ -522,7 +567,7 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_writeoff_conversation() -> ConversationHandler:
     flavor_or_cancel = CallbackQueryHandler(
         handle_flavor_select,
-        pattern=r"^wo_(f_\d+|done|cancel)$",
+        pattern=r"^wo_(f_\d+|done|cancel|potato)$",
     )
     return ConversationHandler(
         entry_points=[
