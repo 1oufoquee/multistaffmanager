@@ -79,28 +79,32 @@ def _flavor_keyboard(
 
 # ── Ingredient calculation ────────────────────────────────────────────────────
 
+def _is_numeric(value) -> bool:
+    """True only for int/float values, excluding booleans."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _calculate(recipe: dict, weight: float) -> dict[str, float]:
     """
-    Recipe has flat fields:
-      'ГОТОВИЙ ПРОДУКТ' — batch output weight (kg)
-      all other numeric fields  — ingredient amounts per that batch
+    All recipe values are in kilograms, exactly as stored in Firestore.
 
-    result_ingredient = field_value × (weight / ГОТОВИЙ_ПРОДУКТ)
+    Formula per ingredient:
+        ingredient_used = (weight / ГОТОВИЙ_ПРОДУКТ) * ingredient_amount
+
+    Fields skipped: _id, id, name, ГОТОВИЙ ПРОДУКТ, and any non-numeric field.
+    No unit conversion — values are used as-is.
     """
-    batch_weight = float(recipe.get("ГОТОВИЙ ПРОДУКТ") or 1.0)
-    if batch_weight <= 0:
-        batch_weight = 1.0
-    multiplier = weight / batch_weight
+    raw_batch = recipe.get("ГОТОВИЙ ПРОДУКТ")
+    batch_weight = float(raw_batch) if _is_numeric(raw_batch) and raw_batch > 0 else 1.0
 
-    SKIP = {"_id", "name", "ГОТОВИЙ ПРОДУКТ"}
+    SKIP = {"_id", "id", "name", "ГОТОВИЙ ПРОДУКТ"}
     result: dict[str, float] = {}
     for key, value in recipe.items():
         if key in SKIP:
             continue
-        try:
-            result[key] = round(float(value) * multiplier, 3)
-        except (TypeError, ValueError):
+        if not _is_numeric(value):
             continue
+        result[key] = round((weight / batch_weight) * float(value), 3)
     return result
 
 
