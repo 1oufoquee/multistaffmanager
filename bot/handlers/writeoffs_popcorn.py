@@ -34,8 +34,8 @@ def _ing_emoji(name: str) -> str:
     if "ікра" in n or "икра" in n:             return "🐟"
     if "карамель" in n:                        return "🍯"
     if "цукор" in n:                            return "🍚"
-    if "добавка" in n:                          return "🔸"
-    return "•"
+    if "добавка" in n:                          return "🍓"
+    return "🍓"
 
 
 def _flavor_emoji(name: str) -> str:
