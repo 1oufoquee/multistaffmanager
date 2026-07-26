@@ -41,6 +41,9 @@ def _writeoffs_ref(db):
 def _menu_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Menu")
 
+def _active_writeoffs_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("ActiveWriteoffs")
+
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -114,6 +117,33 @@ def get_admin_users() -> list[dict]:
         if data.get("userRole") == "admin":
             data["_id"] = doc.id
             result.append(data)
+    return result
+
+
+def get_cinema_staff_list(cinema: str, exclude_tid: int) -> list[dict]:
+    """
+    Return list of {name, telegramId} for active (non-blocked) staff at *cinema*,
+    excluding *exclude_tid*.  Used to build the transfer-to keyboard.
+    """
+    db = get_db()
+    result = []
+    for doc in _users_ref(db).get():
+        data = doc.to_dict() or {}
+        if data.get("isBlocked"):
+            continue
+        user_cinema = data.get("cinema", "atmosfera")
+        if user_cinema != cinema:
+            continue
+        tid = data.get("telegramId")
+        if tid is None:
+            continue
+        try:
+            tid_int = int(tid)
+        except (TypeError, ValueError):
+            continue
+        if tid_int == int(exclude_tid):
+            continue
+        result.append({"name": data.get("name", "—"), "telegramId": tid_int})
     return result
 
 
@@ -215,6 +245,33 @@ def get_recipes() -> list[dict]:
 
 
 # ── Write-offs ────────────────────────────────────────────────────────────────
+
+def save_active_writeoff(data: dict) -> str:
+    """Save a draft write-off (in-progress transfer). Returns doc_id."""
+    db = get_db()
+    _, doc_ref = _active_writeoffs_ref(db).add(data)
+    return doc_ref.id
+
+
+def get_active_writeoff(doc_id: str) -> dict | None:
+    db = get_db()
+    doc = _active_writeoffs_ref(db).document(doc_id).get()
+    if doc.exists:
+        data = doc.to_dict() or {}
+        data["_id"] = doc.id
+        return data
+    return None
+
+
+def update_active_writeoff(doc_id: str, updates: dict) -> None:
+    db = get_db()
+    _active_writeoffs_ref(db).document(doc_id).update(updates)
+
+
+def delete_active_writeoff(doc_id: str) -> None:
+    db = get_db()
+    _active_writeoffs_ref(db).document(doc_id).delete()
+
 
 def save_writeoff(writeoff_data: dict) -> str:
     db = get_db()

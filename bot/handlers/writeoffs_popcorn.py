@@ -7,16 +7,19 @@ from telegram.ext import (
 from bot.firebase_client import (
     is_authorized_user, get_user_info, get_recipes,
     get_admin_users, save_writeoff, get_writeoffs_history,
+    get_cinema_staff_list, save_active_writeoff, get_active_writeoff,
+    update_active_writeoff, delete_active_writeoff,
 )
 from bot.utils import format_timestamp
 
 logger = logging.getLogger(__name__)
 
 # ── Conversation states ──────────────────────────────────────────────────────
-WRITEOFF_MENU = 0   # admin-only: [Нове списання | Архів]
-FLAVOR_SELECT = 1   # pick a product from inline buttons
-WEIGHT_INPUT  = 2   # enter weight as text (popcorn or potato)
-CONFIRMING    = 3   # review report → save or cancel
+WRITEOFF_MENU   = 0   # admin-only: [Нове списання | Архів]
+FLAVOR_SELECT   = 1   # pick a product from inline buttons
+WEIGHT_INPUT    = 2   # enter weight as text (popcorn or potato)
+CONFIRMING      = 3   # review report → save or cancel
+TRANSFER_SELECT = 4   # pick a colleague to hand off the write-off
 
 
 # ── Emoji helpers ─────────────────────────────────────────────────────────────
@@ -83,6 +86,9 @@ def _flavor_keyboard(
 
     if has_entries or has_potato:
         rows.append([InlineKeyboardButton("✅ Підтвердити списання", callback_data="wo_done")])
+
+    # Transfer button — always available so the new assignee can re-transfer
+    rows.append([InlineKeyboardButton("🔄 Передати списання", callback_data="wo_transfer")])
     rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="wo_cancel")])
     return InlineKeyboardMarkup(rows)
 
@@ -195,6 +201,203 @@ def _format_flavor_summary(flavor_entries: list, potato_kg: float = 0.0) -> str:
     return "📝 " + " | ".join(parts)
 
 
+# ── Draft cleanup helper ──────────────────────────────────────────────────────
+
+async def _cleanup_draft(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete ActiveWriteoffs draft if one was created for this session."""
+    draft_id = context.user_data.get("active_writeoff_id")
+    if draft_id:
+        try:
+            delete_active_writeoff(draft_id)
+        except Exception as e:
+            logger.warning(f"Failed to delete draft {draft_id}: {e}")
+
+
+# ── Transfer flow ─────────────────────────────────────────────────────────────
+
+async def _show_transfer_menu(query, context: ContextTypes.DEFAULT_TYPE) -> int:
+    staff_info = context.user_data.get("staff_info", {})
+    cinema     = staff_info.get("cinema", "atmosfera")
+    my_tid     = context.user_data.get("telegram_id")
+
+    try:
+        colleagues = get_cinema_staff_list(cinema, exclude_tid=my_tid)
+    except Exception as e:
+        await query.answer(f"Помилка: {e}", show_alert=True)
+        return FLAVOR_SELECT
+
+    if not colleagues:
+        await query.answer(
+            "Немає інших працівників у цьому кінотеатрі.", show_alert=True
+        )
+        return FLAVOR_SELECT
+
+    rows = [
+        [InlineKeyboardButton(col["name"], callback_data=f"wo_tr_{col['telegramId']}")]
+        for col in colleagues
+    ]
+    rows.append([InlineKeyboardButton("◀ Назад", callback_data="wo_tr_back")])
+
+    await query.edit_message_text(
+        "🔄 *Передати списання*\n\nОберіть працівника:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+    return TRANSFER_SELECT
+
+
+async def handle_transfer_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    # ── Back to product selection ─────────────────────────────────────────────
+    if query.data == "wo_tr_back":
+        recipes        = context.user_data.get("recipes", [])
+        flavor_entries = context.user_data.get("flavor_entries", [])
+        potato_kg      = context.user_data.get("potato_wedges_kg", 0.0)
+        entered_names  = {e["name"] for e in flavor_entries}
+        await query.edit_message_text(
+            "🍿 *Оберіть продукт для списання:*",
+            parse_mode="Markdown",
+            reply_markup=_flavor_keyboard(
+                recipes,
+                has_entries=bool(flavor_entries),
+                entered_names=entered_names,
+                has_potato=potato_kg > 0,
+            ),
+        )
+        return FLAVOR_SELECT
+
+    # ── Select a colleague ────────────────────────────────────────────────────
+    try:
+        new_tid = int(query.data[len("wo_tr_"):])
+    except ValueError:
+        await query.answer("Невідомий вибір.", show_alert=True)
+        return TRANSFER_SELECT
+
+    flavor_entries    = context.user_data.get("flavor_entries", [])
+    total_ingredients = context.user_data.get("total_ingredients", {})
+    potato_kg         = context.user_data.get("potato_wedges_kg", 0.0)
+    staff_info        = context.user_data.get("staff_info", {})
+    cinema            = staff_info.get("cinema", "atmosfera")
+    existing_draft_id = context.user_data.get("active_writeoff_id")
+
+    draft = {
+        "assigned_to":      new_tid,
+        "cinema":           cinema,
+        "flavor_entries":   flavor_entries,
+        "total_ingredients": total_ingredients,
+        "potato_wedges_kg": potato_kg,
+    }
+
+    try:
+        if existing_draft_id:
+            # Re-transfer: update assignee only; data already persisted
+            update_active_writeoff(existing_draft_id, {"assigned_to": new_tid})
+            doc_id = existing_draft_id
+        else:
+            doc_id = save_active_writeoff(draft)
+            context.user_data["active_writeoff_id"] = doc_id
+    except Exception as e:
+        await query.edit_message_text(f"❌ Помилка збереження: {e}")
+        return ConversationHandler.END
+
+    # Notify the new assignee
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("▶ Продовжити списання", callback_data=f"wo_resume_{doc_id}")
+    ]])
+    try:
+        await context.bot.send_message(
+            chat_id=new_tid,
+            text=(
+                "📦 *Вам передано списання.*\n\n"
+                "Продовжіть з того місця, де зупинився ваш колега."
+            ),
+            parse_mode="Markdown",
+            reply_markup=kb,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to notify new assignee {new_tid}: {e}")
+
+    await query.edit_message_text("✅ Списання передано колезі.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def handle_resume_writeoff(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Entry point: fires when a notified employee presses ▶ Продовжити списання.
+    Loads the draft from ActiveWriteoffs and drops them into FLAVOR_SELECT.
+    """
+    query       = update.callback_query
+    telegram_id = update.effective_user.id
+    await query.answer()
+
+    if not is_authorized_user(telegram_id):
+        await query.edit_message_text("Доступ заборонено.")
+        return ConversationHandler.END
+
+    doc_id = query.data[len("wo_resume_"):]
+
+    try:
+        draft = get_active_writeoff(doc_id)
+    except Exception as e:
+        await query.edit_message_text(f"❌ Помилка завантаження: {e}")
+        return ConversationHandler.END
+
+    if not draft:
+        await query.edit_message_text("❌ Списання не знайдено або вже завершено.")
+        return ConversationHandler.END
+
+    # Verify this person is the assigned recipient
+    assigned_to = draft.get("assigned_to")
+    if assigned_to is not None and int(assigned_to) != telegram_id:
+        await query.edit_message_text("❌ Це списання призначено іншому працівнику.")
+        return ConversationHandler.END
+
+    # Load fresh recipes (don't persist stale recipe blobs in Firestore)
+    try:
+        recipes = get_recipes()
+    except Exception as e:
+        await query.edit_message_text(f"❌ Помилка завантаження рецептів: {e}")
+        return ConversationHandler.END
+
+    info = get_user_info(telegram_id)
+
+    # Restore conversation state
+    context.user_data["staff_info"]        = info or {}
+    context.user_data["telegram_id"]       = telegram_id
+    context.user_data["chat_id"]           = update.effective_chat.id
+    context.user_data["recipes"]           = recipes
+    context.user_data["flavor_entries"]    = draft.get("flavor_entries", [])
+    context.user_data["total_ingredients"] = draft.get("total_ingredients", {})
+    context.user_data["potato_wedges_kg"]  = draft.get("potato_wedges_kg", 0.0)
+    context.user_data["active_writeoff_id"] = doc_id
+    context.user_data["pending_potato"]    = False
+
+    flavor_entries = context.user_data["flavor_entries"]
+    potato_kg      = context.user_data["potato_wedges_kg"]
+    entered_names  = {e["name"] for e in flavor_entries}
+    summary        = _format_flavor_summary(flavor_entries, potato_kg)
+
+    text = "🍿 *Продовжуємо списання*"
+    if summary:
+        text += f"\n\n{summary}"
+    text += "\n\nОберіть продукт або підтвердіть:"
+
+    await query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_flavor_keyboard(
+            recipes,
+            has_entries=bool(flavor_entries),
+            entered_names=entered_names,
+            has_potato=potato_kg > 0,
+        ),
+    )
+    return FLAVOR_SELECT
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def writeoff_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -291,12 +494,16 @@ async def handle_flavor_select(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     if query.data == "wo_cancel":
+        await _cleanup_draft(context)
         await query.edit_message_text("❌ Списання скасовано.")
         context.user_data.clear()
         return ConversationHandler.END
 
     if query.data == "wo_done":
         return await _show_ingredient_summary(query, context)
+
+    if query.data == "wo_transfer":
+        return await _show_transfer_menu(query, context)
 
     # ── Картопляні спеки ─────────────────────────────────────────────────────
     if query.data == "wo_potato":
@@ -445,6 +652,7 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
 
     if query.data == "wo_cancel":
+        await _cleanup_draft(context)
         await query.edit_message_text("❌ Списання скасовано.")
         context.user_data.clear()
         return ConversationHandler.END
@@ -464,6 +672,9 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     }
     if potato_kg > 0:
         payload["potato_wedges"] = potato_kg
+
+    # Remove the in-progress draft now that we're saving the real write-off
+    await _cleanup_draft(context)
 
     try:
         doc_id = save_writeoff(payload)
@@ -557,6 +768,7 @@ async def _show_archive(query, context: ContextTypes.DEFAULT_TYPE):
 # ── Cancel ────────────────────────────────────────────────────────────────────
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _cleanup_draft(context)
     context.user_data.clear()
     await update.message.reply_text("❌ Списання скасовано.")
     return ConversationHandler.END
@@ -567,11 +779,13 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 def build_writeoff_conversation() -> ConversationHandler:
     flavor_or_cancel = CallbackQueryHandler(
         handle_flavor_select,
-        pattern=r"^wo_(f_\d+|done|cancel|potato)$",
+        pattern=r"^wo_(f_\d+|done|cancel|potato|transfer)$",
     )
     return ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^🍿 Списання$"), writeoff_start),
+            # Notified employee presses ▶ Продовжити списання
+            CallbackQueryHandler(handle_resume_writeoff, pattern=r"^wo_resume_"),
         ],
         states={
             WRITEOFF_MENU: [
@@ -586,6 +800,9 @@ def build_writeoff_conversation() -> ConversationHandler:
             ],
             CONFIRMING: [
                 CallbackQueryHandler(handle_confirm, pattern=r"^wo_(save|cancel)$"),
+            ],
+            TRANSFER_SELECT: [
+                CallbackQueryHandler(handle_transfer_select, pattern=r"^wo_tr_"),
             ],
         },
         fallbacks=[
