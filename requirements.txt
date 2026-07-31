@@ -3,3 +3,4 @@ firebase-admin==6.4.0
 beautifulsoup4
 requests
 lxml
+tzdata

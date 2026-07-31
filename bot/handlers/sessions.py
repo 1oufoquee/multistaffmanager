@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from bot.firebase_client import (
     is_authorized_user, get_user_info, get_schedule, toggle_light_reminders,
 )
+from bot.utils import KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +86,9 @@ async def handle_ses_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    today_label = datetime.now().strftime("%d.%m.%Y")
+    now = datetime.now(KYIV_TZ)
+    today_str   = now.strftime("%Y-%m-%d")
+    today_label = now.strftime("%d.%m.%Y")
 
     try:
         schedule = get_schedule(today_str)
@@ -147,7 +149,7 @@ async def handle_ses_nearest(update: Update, context: ContextTypes.DEFAULT_TYPE)
         InlineKeyboardButton("◀ Назад", callback_data="ses_back")
     ]])
 
-    now         = datetime.now()
+    now         = datetime.now(KYIV_TZ)
     now_minutes = now.hour * 60 + now.minute
     today_str   = now.strftime("%Y-%m-%d")
 

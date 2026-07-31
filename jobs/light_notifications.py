@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from telegram.ext import ContextTypes
 
 from bot.firebase_client import get_schedule, get_light_reminder_users
+from bot.utils import KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +33,21 @@ def _is_target_hall(hall) -> bool:
 
 
 def _parse_to_today_dt(t) -> datetime | None:
-    """Convert time value to a datetime on today's date."""
+    """Convert time value to a tz-aware datetime on today's Kyiv date."""
     if t is None:
         return None
-    today = datetime.now().date()
+    today = datetime.now(KYIV_TZ).date()
     if hasattr(t, "hour"):          # already a datetime / time object
-        return datetime(today.year, today.month, today.day, t.hour, t.minute, getattr(t, "second", 0))
+        return datetime(today.year, today.month, today.day,
+                        t.hour, t.minute, getattr(t, "second", 0),
+                        tzinfo=KYIV_TZ)
     s = str(t).strip()
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
             p = datetime.strptime(s, fmt)
-            return datetime(today.year, today.month, today.day, p.hour, p.minute, p.second)
+            return datetime(today.year, today.month, today.day,
+                            p.hour, p.minute, p.second,
+                            tzinfo=KYIV_TZ)
         except ValueError:
             continue
     return None
@@ -81,7 +86,7 @@ async def _send_to_all(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
 # ── Main job ──────────────────────────────────────────────────────────────────
 
 async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
-    now       = datetime.now()
+    now       = datetime.now(KYIV_TZ)
     date_str  = now.strftime("%Y-%m-%d")
     sent: set = context.bot_data.setdefault("sent_notifications", set())
 

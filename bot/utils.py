@@ -1,19 +1,25 @@
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# Single source of truth for the bot's operating timezone.
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 
 def format_timestamp(ts) -> str:
+    """Format a Firestore timestamp (or epoch int/float) as 'DD.MM.YYYY HH:MM' in Kyiv time."""
     if ts is None:
         return "—"
     try:
         if hasattr(ts, "strftime"):
             dt = ts
-            if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+            # Firestore datetimes come as UTC-aware; naive ones are assumed UTC.
+            if getattr(dt, "tzinfo", None) is None:
                 dt = dt.replace(tzinfo=timezone.utc)
-            return dt.strftime("%d.%m.%Y %H:%M")
+            return dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
         if isinstance(ts, (int, float)):
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            return dt.strftime("%d.%m.%Y %H:%M")
+            return dt.astimezone(KYIV_TZ).strftime("%d.%m.%Y %H:%M")
     except Exception:
         pass
     return str(ts)

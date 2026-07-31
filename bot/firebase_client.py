@@ -3,6 +3,9 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 _app = None
 _db = None
@@ -201,7 +204,7 @@ def get_statistics() -> dict:
     completed = 0
     total_revenue = 0.0
 
-    today = datetime.now().date()
+    today = datetime.now(_KYIV_TZ).date()
 
     for doc in _orders_ref(db).get():
         data = doc.to_dict()
