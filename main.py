@@ -7,6 +7,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -16,7 +17,15 @@ from bot.handlers.stats import stats_handler
 from bot.handlers.staff import staff_handler
 from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 from bot.handlers.admin_panel import build_admin_panel
+from bot.handlers.sessions import (
+    sessions_handler,
+    handle_ses_today,
+    handle_ses_nearest,
+    handle_ses_toggle,
+    handle_ses_back,
+)
 from bot.firebase_client import is_authorized_user, get_user_info
+from jobs.light_notifications import check_light_notifications
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -62,6 +71,8 @@ async def keyboard_router(update: Update, context):
         await staff_handler(update, context)
     elif text == "📊 Статистика":
         await stats_handler(update, context)
+    elif text == "🎬 Сеанси":
+        await sessions_handler(update, context)
     # "🍿 Списання" and "👑 Адмін-Панель" are handled by ConversationHandlers
 
 
@@ -92,9 +103,23 @@ def main():
     app.add_handler(CommandHandler("staff",  staff_handler))
     app.add_handler(CommandHandler("stats",  stats_handler))
 
+    # ── Sessions callbacks ────────────────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(handle_ses_today,   pattern=r"^ses_today$"))
+    app.add_handler(CallbackQueryHandler(handle_ses_nearest, pattern=r"^ses_nearest$"))
+    app.add_handler(CallbackQueryHandler(handle_ses_toggle,  pattern=r"^ses_toggle$"))
+    app.add_handler(CallbackQueryHandler(handle_ses_back,    pattern=r"^ses_back$"))
+
     # ── Keyboard / text handler ───────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.COMMAND, unknown_handler))
+
+    # ── Background job: light notifications (every 60 s) ─────────────────────
+    app.job_queue.run_repeating(
+        check_light_notifications,
+        interval=60,
+        first=10,     # first run 10 s after startup to let Firebase warm up
+        name="light_notifications",
+    )
 
     logger.info("Handlers registered. Starting polling — Bot is ready.")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

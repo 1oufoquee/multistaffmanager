@@ -41,6 +41,9 @@ def _writeoffs_ref(db):
 def _menu_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Menu")
 
+def _schedules_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("Schedules")
+
 def _active_writeoffs_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("ActiveWriteoffs")
 
@@ -245,6 +248,46 @@ def get_recipes() -> list[dict]:
 
 
 # ── Write-offs ────────────────────────────────────────────────────────────────
+
+# ── Schedules ─────────────────────────────────────────────────────────────────
+
+def get_schedule(date_str: str) -> dict | None:
+    """Load schedule doc for 'yyyy-MM-dd'. Returns dict or None if not found."""
+    db = get_db()
+    doc = _schedules_ref(db).document(date_str).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def get_light_reminder_users() -> list[int]:
+    """Return telegram IDs of all non-blocked users with lightReminders == true."""
+    db = get_db()
+    result = []
+    for doc in _users_ref(db).get():
+        data = doc.to_dict() or {}
+        if data.get("isBlocked"):
+            continue
+        if not data.get("lightReminders"):
+            continue
+        tid = data.get("telegramId")
+        if tid is not None:
+            try:
+                result.append(int(tid))
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
+def toggle_light_reminders(telegram_id: int) -> bool:
+    """Toggle the lightReminders flag for a user. Returns the new bool value."""
+    doc, data = _find_user_doc(telegram_id)
+    if doc is None:
+        raise ValueError(f"User {telegram_id} not found")
+    new_val = not bool(data.get("lightReminders", False))
+    doc.reference.update({"lightReminders": new_val})
+    return new_val
+
 
 def save_active_writeoff(data: dict) -> str:
     """Save a draft write-off (in-progress transfer). Returns doc_id."""
