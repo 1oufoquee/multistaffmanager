@@ -351,7 +351,7 @@ async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
                 sent.add(rid_off)   # past — skip silently on restart
 
         # ── Lights ON — 7 minutes before session end ──────────────────────────
-        notify_on_dt = end_dt - timedelta(minutes=7)
+        notify_on_dt = end_dt - timedelta(minutes=1)
         if rid_on not in sent:
             delta = (now - notify_on_dt).total_seconds()
             if 0 <= delta <= WINDOW:
