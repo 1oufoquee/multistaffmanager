@@ -25,7 +25,7 @@ from bot.handlers.sessions import (
     handle_ses_back,
 )
 from bot.firebase_client import is_authorized_user, get_user_info
-from jobs.light_notifications import check_light_notifications
+from jobs.light_notifications import check_light_notifications, handle_light_confirm
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -108,6 +108,9 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_ses_nearest, pattern=r"^ses_nearest$"))
     app.add_handler(CallbackQueryHandler(handle_ses_toggle,  pattern=r"^ses_toggle$"))
     app.add_handler(CallbackQueryHandler(handle_ses_back,    pattern=r"^ses_back$"))
+
+    # ── Light-reminder confirmation callbacks ─────────────────────────────────
+    app.add_handler(CallbackQueryHandler(handle_light_confirm, pattern=r"^lc_(off|on)_"))
 
     # ── Keyboard / text handler ───────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, keyboard_router))

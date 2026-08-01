@@ -47,6 +47,9 @@ def _menu_ref(db):
 def _schedules_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("Schedules")
 
+def _light_confirmations_ref(db):
+    return db.collection("Cinema").document("atmosfera").collection("LightConfirmations")
+
 def _active_writeoffs_ref(db):
     return db.collection("Cinema").document("atmosfera").collection("ActiveWriteoffs")
 
@@ -290,6 +293,37 @@ def toggle_light_reminders(telegram_id: int) -> bool:
     new_val = not bool(data.get("lightReminders", False))
     doc.reference.update({"lightReminders": new_val})
     return new_val
+
+
+# ── Light-reminder confirmations ──────────────────────────────────────────────
+
+def get_light_confirmation(reminder_id: str) -> dict | None:
+    """Return the confirmation doc for *reminder_id*, or None if not yet confirmed."""
+    db = get_db()
+    doc = _light_confirmations_ref(db).document(reminder_id).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def confirm_light_reminder(reminder_id: str, conf_data: dict) -> bool:
+    """
+    Atomically save *conf_data* for *reminder_id* only if not already confirmed.
+    Returns True when this call wins the race (first confirmation).
+    Returns False when the reminder was already confirmed by someone else.
+    """
+    db  = get_db()
+    ref = _light_confirmations_ref(db).document(reminder_id)
+
+    @firestore.transactional
+    def _try(transaction, ref, data):
+        snap = ref.get(transaction=transaction)
+        if snap.exists and snap.to_dict().get("confirmed"):
+            return False
+        transaction.set(ref, data)
+        return True
+
+    return _try(db.transaction(), ref, conf_data)
 
 
 def save_active_writeoff(data: dict) -> str:
