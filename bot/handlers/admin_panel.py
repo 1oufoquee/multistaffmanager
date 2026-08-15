@@ -17,7 +17,7 @@ from bot.utils import format_timestamp, KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
-ELEVATED_ROLES = ("admin", "Директор")
+ELEVATED_ROLES = ("admin", "Директор", "developer")
 
 # ── States ────────────────────────────────────────────────────────────────────
 AP_HOME          = 10

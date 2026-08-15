@@ -1,60 +1,187 @@
 import os
 import json
+import logging
 import firebase_admin
 from firebase_admin import credentials, firestore
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
+from contextvars import ContextVar
 
 _KYIV_TZ = ZoneInfo("Europe/Kyiv")
+logger = logging.getLogger(__name__)
 
-_app = None
-_db = None
+PROJECTS = {
+    "atmosfera": {
+        "label": "Atmosfera",
+        "env": "FIREBASE_SERVICE_ACCOUNT_JSON",
+        "cinema_document": "atmosfera",
+    },
+    "karavan": {
+        "label": "Karavan",
+        "env": "FIREBASE_KARAVAN_SERVICE_ACCOUNT_JSON",
+        "cinema_document": "karavan",
+    },
+    "retroville": {
+        "label": "Retroville",
+        "env": "FIREBASE_RETROVILLE_SERVICE_ACCOUNT_JSON",
+        "cinema_document": "retroville",
+    },
+}
+
+_active_project: ContextVar[str] = ContextVar(
+    "active_firebase_project",
+    default="atmosfera",
+)
+_db_by_project: dict = {}
 
 
-def get_db():
-    global _app, _db
-    if _db is None:
-        service_account_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
-        if not service_account_json:
-            raise ValueError("FIREBASE_SERVICE_ACCOUNT_JSON env var not set")
+def _project_config(project_key: str) -> dict:
+    try:
+        return PROJECTS[project_key]
+    except KeyError as exc:
+        raise ValueError(f"Unknown cinema project: {project_key}") from exc
+
+
+def _get_project_db(project_key: str):
+    """Return a cached Firestore client for one configured Firebase project."""
+    if project_key in _db_by_project:
+        return _db_by_project[project_key]
+
+    config = _project_config(project_key)
+    service_account_json = os.environ.get(config["env"])
+    if not service_account_json:
+        raise ValueError(
+            f"{config['env']} env var is not set for the {config['label']} project"
+        )
+
+    try:
         service_account_info = json.loads(service_account_json)
         cred = credentials.Certificate(service_account_info)
-        if not firebase_admin._apps:
-            _app = firebase_admin.initialize_app(cred)
-        else:
-            _app = firebase_admin.get_app()
-        _db = firestore.client()
-    return _db
+        app_name = f"multistaff_{project_key}"
+        try:
+            app = firebase_admin.get_app(app_name)
+        except ValueError:
+            app = firebase_admin.initialize_app(cred, name=app_name)
+        db = firestore.client(app=app)
+    except Exception:
+        logger.exception("Failed to initialize Firebase project %s", project_key)
+        raise
+
+    _db_by_project[project_key] = db
+    return db
+
+
+def get_db(project_key: str | None = None):
+    """Return the Firestore client selected for the current async update."""
+    return _get_project_db(project_key or _active_project.get())
+
+
+def set_active_project(project_key: str) -> None:
+    """Select a Firebase project for the current async update context."""
+    _project_config(project_key)
+    _active_project.set(project_key)
+
+
+def get_active_project() -> str:
+    return _active_project.get()
 
 
 # ── Collection refs ──────────────────────────────────────────────────────────
 
+def _cinema_ref(db):
+    project = _project_config(get_active_project())
+    return db.collection("Cinema").document(project["cinema_document"])
+
+
 def _users_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Users")
+    return _cinema_ref(db).collection("Users")
 
 def _orders_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Orders")
+    return _cinema_ref(db).collection("Orders")
 
 def _recipes_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Recipes")
+    return _cinema_ref(db).collection("Recipes")
 
 def _writeoffs_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Writeoffs")
+    return _cinema_ref(db).collection("Writeoffs")
 
 def _menu_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Menu")
+    return _cinema_ref(db).collection("Menu")
 
 def _schedules_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("Schedules")
+    return _cinema_ref(db).collection("Schedules")
 
 def _light_confirmations_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("LightConfirmations")
+    return _cinema_ref(db).collection("LightConfirmations")
 
 def _active_writeoffs_ref(db):
-    return db.collection("Cinema").document("atmosfera").collection("ActiveWriteoffs")
+    return _cinema_ref(db).collection("ActiveWriteoffs")
+
+
+def _developers_ref(db):
+    return db.collection("Developers")
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
+
+def _find_developer_doc(telegram_id: int):
+    """Return (snapshot, sanitized_data) from the global Developers collection."""
+    db = get_db("atmosfera")
+    for doc in _developers_ref(db).get():
+        data = doc.to_dict() or {}
+        try:
+            if int(data.get("telegramId") or 0) == int(telegram_id):
+                data.pop("password", None)
+                data["_id"] = doc.id
+                return doc, data
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
+
+def get_developer_info(telegram_id: int) -> dict | None:
+    """Return a developer profile only when userRole is exactly developer."""
+    doc, data = _find_developer_doc(telegram_id)
+    if doc is None or data.get("userRole") != "developer":
+        return None
+    return data
+
+
+def set_developer_project(telegram_id: int, project_key: str) -> None:
+    """Persist a developer's selected project in Developers/{documentId}."""
+    _project_config(project_key)
+    # Fail before changing the developer's stored selection if the target
+    # project credentials are unavailable or invalid.
+    _get_project_db(project_key)
+    db = get_db("atmosfera")
+    doc, data = _find_developer_doc(telegram_id)
+    if doc is None or data.get("userRole") != "developer":
+        raise PermissionError("Developer account not found")
+    doc.reference.update({"selectedProject": project_key})
+
+
+def get_developer_project(telegram_id: int) -> str | None:
+    info = get_developer_info(telegram_id)
+    selected = (info or {}).get("selectedProject")
+    return selected if selected in PROJECTS else None
+
+
+def activate_project_for_user(telegram_id: int) -> str:
+    """
+    Select the project for one incoming Telegram update.
+
+    Developers use their persisted selection; all other users remain on the
+    default Atmosfera project.
+    """
+    developer = get_developer_info(telegram_id)
+    if developer:
+        project = developer.get("selectedProject")
+        if project in PROJECTS:
+            set_active_project(project)
+            return project
+    set_active_project("atmosfera")
+    return "atmosfera"
+
 
 def _find_user_doc(telegram_id: int):
     """Returns (doc_snapshot, dict) or (None, None). Always fetches fresh."""
@@ -70,6 +197,9 @@ def _find_user_doc(telegram_id: int):
 
 
 def is_authorized_user(telegram_id: int) -> bool:
+    developer = get_developer_info(telegram_id)
+    if developer:
+        return True
     doc, data = _find_user_doc(telegram_id)
     if doc is None:
         return False
@@ -77,6 +207,12 @@ def is_authorized_user(telegram_id: int) -> bool:
 
 
 def get_user_info(telegram_id: int) -> dict | None:
+    developer = get_developer_info(telegram_id)
+    if developer:
+        selected = developer.get("selectedProject")
+        developer["cinema"] = selected or "atmosfera"
+        developer["project"] = selected
+        return developer
     doc, data = _find_user_doc(telegram_id)
     if doc is None:
         return None
@@ -86,6 +222,9 @@ def get_user_info(telegram_id: int) -> dict | None:
 
 def get_user_cinema(telegram_id: int) -> str:
     """Return the cinema slug for this staff member. Falls back to 'atmosfera'."""
+    developer = get_developer_info(telegram_id)
+    if developer:
+        return developer.get("selectedProject") or "atmosfera"
     info = get_user_info(telegram_id)
     return (info or {}).get("cinema", "atmosfera")
 
@@ -282,11 +421,35 @@ def get_light_reminder_users() -> list[int]:
                 result.append(int(tid))
             except (TypeError, ValueError):
                 pass
+
+    # Developers are global accounts, so they may not have a local Users
+    # document in the selected cinema project.
+    root_db = get_db("atmosfera")
+    for doc in _developers_ref(root_db).get():
+        data = doc.to_dict() or {}
+        if data.get("userRole") != "developer" or not data.get("lightReminders"):
+            continue
+        if data.get("selectedProject") != get_active_project():
+            continue
+        tid = data.get("telegramId")
+        if tid is not None:
+            try:
+                tid_int = int(tid)
+                if tid_int not in result:
+                    result.append(tid_int)
+            except (TypeError, ValueError):
+                pass
     return result
 
 
 def toggle_light_reminders(telegram_id: int) -> bool:
     """Toggle the lightReminders flag for a user. Returns the new bool value."""
+    developer_doc, developer = _find_developer_doc(telegram_id)
+    if developer_doc is not None and developer.get("userRole") == "developer":
+        new_val = not bool(developer.get("lightReminders", False))
+        developer_doc.reference.update({"lightReminders": new_val})
+        return new_val
+
     doc, data = _find_user_doc(telegram_id)
     if doc is None:
         raise ValueError(f"User {telegram_id} not found")
