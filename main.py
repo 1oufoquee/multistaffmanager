@@ -17,6 +17,10 @@ from bot.handlers.stats import stats_handler
 from bot.handlers.staff import staff_handler
 from bot.handlers.writeoffs_popcorn import build_writeoff_conversation
 from bot.handlers.admin_panel import build_admin_panel
+from bot.handlers.daily_writeoff_summary import (
+    SUMMARY_BUTTON,
+    daily_writeoff_summary_handler,
+)
 from bot.handlers.sessions import (
     sessions_handler,
     handle_ses_today,
@@ -73,7 +77,9 @@ async def keyboard_router(update: Update, context):
         await stats_handler(update, context)
     elif text == "🎬 Сеанси":
         await sessions_handler(update, context)
-    # "🍿 Списання" and "👑 Адмін-Панель" are handled by ConversationHandlers
+    elif text == SUMMARY_BUTTON:
+        await daily_writeoff_summary_handler(update, context)
+    # "🍿 Списання" and "👑 Адмін-Панель" are handled by ConversationHandlers.
 
 
 async def unknown_handler(update: Update, context):

@@ -2,7 +2,7 @@ import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 _KYIV_TZ = ZoneInfo("Europe/Kyiv")
@@ -369,6 +369,50 @@ def get_writeoffs_history(limit: int = 20) -> list[dict]:
         results.append(data)
     results.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
     return results[:limit]
+
+
+def get_writeoffs_for_day(day: date | None = None) -> list[dict]:
+    """
+    Read all write-offs whose createdAt falls on the requested Kyiv calendar day.
+
+    This function is intentionally read-only. It uses the existing Writeoffs
+    collection and does not alter any document.
+    """
+    target_day = day or datetime.now(_KYIV_TZ).date()
+    start = datetime.combine(target_day, datetime.min.time(), tzinfo=_KYIV_TZ)
+    end = start + timedelta(days=1)
+
+    db = get_db()
+    results = []
+    for doc in _writeoffs_ref(db).get():
+        data = doc.to_dict() or {}
+        created = data.get("createdAt")
+        if not created:
+            continue
+
+        try:
+            if isinstance(created, datetime):
+                created_dt = created
+                if created_dt.tzinfo is None:
+                    # Firestore timestamps represent UTC instants.
+                    created_dt = created_dt.replace(tzinfo=ZoneInfo("UTC"))
+                created_dt = created_dt.astimezone(_KYIV_TZ)
+            elif isinstance(created, (int, float)):
+                created_dt = datetime.fromtimestamp(created, tz=_KYIV_TZ)
+            else:
+                created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=ZoneInfo("UTC"))
+                created_dt = created_dt.astimezone(_KYIV_TZ)
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        if start <= created_dt < end:
+            data["_id"] = doc.id
+            results.append(data)
+
+    results.sort(key=lambda item: item.get("createdAt") or 0, reverse=True)
+    return results
 
 
 # ── Menu ──────────────────────────────────────────────────────────────────────

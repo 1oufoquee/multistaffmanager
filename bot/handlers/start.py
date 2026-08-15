@@ -6,18 +6,18 @@ ELEVATED_ROLES = ("admin", "Директор")
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
-        [KeyboardButton("📊 Статистика"), KeyboardButton("🍿 Списання")],
+        [KeyboardButton("👥 Працівники"), KeyboardButton("🍿 Списання")],
         [KeyboardButton("🎬 Сеанси")],
+        [KeyboardButton("📊 Підсумок списань за сьогодні")],
     ],
     resize_keyboard=True,
 )
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton("📦 Замовлення"), KeyboardButton("👥 Працівники")],
-        [KeyboardButton("📊 Статистика"), KeyboardButton("🍿 Списання")],
+        [KeyboardButton("👥 Працівники"), KeyboardButton("🍿 Списання")],
         [KeyboardButton("🎬 Сеанси"), KeyboardButton("👑 Адмін-Панель")],
+        [KeyboardButton("📊 Підсумок списань за сьогодні")],
     ],
     resize_keyboard=True,
 )

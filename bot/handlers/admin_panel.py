@@ -1,6 +1,6 @@
 import logging
 import re as _re
-from datetime import datetime, timezone
+from datetime import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ContextTypes, ConversationHandler, CommandHandler,
@@ -13,7 +13,7 @@ from bot.firebase_client import (
     get_all_staff, add_staff_user, update_staff_user, delete_staff_user,
     get_writeoffs_history,
 )
-from bot.utils import format_timestamp
+from bot.utils import format_timestamp, KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,9 @@ def _role_label(role: str) -> str:
 # ── Access guard ──────────────────────────────────────────────────────────────
 
 async def _deny(update: Update) -> int:
-    await update.message.reply_text("⛔ Доступ заборонено.")
+    message = update.effective_message
+    if message:
+        await message.reply_text("⛔ Доступ заборонено.")
     return ConversationHandler.END
 
 
@@ -182,12 +184,25 @@ def _staff_text(s: dict) -> str:
 
 async def ap_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tid  = update.effective_user.id
-    if not is_authorized_user(tid):
-        return await _deny(update)
+    try:
+        if not is_authorized_user(tid):
+            logger.warning("Admin panel denied: unauthorized Telegram ID %s", tid)
+            return await _deny(update)
 
-    info = get_user_info(tid)
-    if not _is_elevated(info):
-        return await _deny(update)
+        info = get_user_info(tid)
+        if not _is_elevated(info):
+            logger.warning(
+                "Admin panel denied: Telegram ID %s has role %r",
+                tid,
+                (info or {}).get("userRole"),
+            )
+            return await _deny(update)
+    except Exception:
+        logger.exception("Admin panel authorization check failed for Telegram ID %s", tid)
+        await update.effective_message.reply_text(
+            "❌ Не вдалося перевірити права доступу. Спробуйте ще раз."
+        )
+        return ConversationHandler.END
 
     context.user_data["ap_info"] = info or {}
     await update.message.reply_text(
@@ -209,6 +224,14 @@ async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await query.edit_message_text("👑 Адмін-Панель закрито.")
         context.user_data.clear()
         return ConversationHandler.END
+
+    if d == "ap_home":
+        await query.edit_message_text(
+            "👑 *Адмін-Панель*\n\nОберіть розділ:",
+            parse_mode="Markdown",
+            reply_markup=AP_HOME_KB,
+        )
+        return AP_HOME
 
     if d == "ap_menu":
         context.user_data.pop("ap_add", None)
@@ -490,7 +513,11 @@ async def handle_menu_search_cb(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             update_menu_item(item_id, updates)
         except Exception:
-            pass
+            logger.exception("Failed to update modifiers for menu item %s", item_id)
+            await query.edit_message_text(
+                f"❌ Помилка оновлення модифікаторів: {item_id}"
+            )
+            return AP_MENU_SEARCH
         item = get_menu_item(item_id)
         if item:
             await query.edit_message_text(
@@ -505,15 +532,21 @@ async def handle_menu_search_cb(update: Update, context: ContextTypes.DEFAULT_TY
         item_id = d[len("ap_meh_"):]
         item = get_menu_item(item_id)
         if item:
-            new_hidden = not item.get("isHidden", False)
-            update_menu_item(item_id, {"isHidden": new_hidden})
-            item["isHidden"] = new_hidden
-            status = "сховано 🙈" if new_hidden else "показано 👁"
-            await query.edit_message_text(
-                f"✅ Позицію {status}\n\n" + _menu_item_text(item),
-                parse_mode="Markdown",
-                reply_markup=_item_actions_kb(item_id, new_hidden),
-            )
+            try:
+                new_hidden = not item.get("isHidden", False)
+                update_menu_item(item_id, {"isHidden": new_hidden})
+                item["isHidden"] = new_hidden
+                status = "сховано 🙈" if new_hidden else "показано 👁"
+                await query.edit_message_text(
+                    f"✅ Позицію {status}\n\n" + _menu_item_text(item),
+                    parse_mode="Markdown",
+                    reply_markup=_item_actions_kb(item_id, new_hidden),
+                )
+            except Exception:
+                logger.exception("Failed to toggle visibility for menu item %s", item_id)
+                await query.edit_message_text(
+                    f"❌ Помилка оновлення позиції: {item_id}"
+                )
         return AP_MENU_SEARCH
 
     # ── Delete: ask confirm ──
@@ -939,7 +972,7 @@ def _filter_wo_by_date(history: list, filter_date: str) -> list:
     parts = filter_date.split(".")
     try:
         if len(parts) == 3:
-            target = datetime(int(parts[2]), int(parts[1]), int(parts[0]), tzinfo=timezone.utc)
+            target = datetime(int(parts[2]), int(parts[1]), int(parts[0]), tzinfo=KYIV_TZ)
             return [
                 e for e in history
                 if _wo_matches_day(e.get("createdAt"), target)
@@ -958,7 +991,7 @@ def _filter_wo_by_date(history: list, filter_date: str) -> list:
 def _wo_matches_day(ts, target: datetime) -> bool:
     try:
         if hasattr(ts, "year"):
-            dt = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+            dt = ts.replace(tzinfo=KYIV_TZ) if ts.tzinfo is None else ts.astimezone(KYIV_TZ)
             return dt.year == target.year and dt.month == target.month and dt.day == target.day
     except Exception:
         pass
@@ -968,7 +1001,7 @@ def _wo_matches_day(ts, target: datetime) -> bool:
 def _wo_matches_month(ts, month: int, year: int) -> bool:
     try:
         if hasattr(ts, "year"):
-            dt = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+            dt = ts.replace(tzinfo=KYIV_TZ) if ts.tzinfo is None else ts.astimezone(KYIV_TZ)
             return dt.month == month and dt.year == year
     except Exception:
         pass
