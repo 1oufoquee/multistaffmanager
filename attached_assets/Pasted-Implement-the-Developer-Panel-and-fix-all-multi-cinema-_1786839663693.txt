@@ -1,0 +1,132 @@
+Implement the Developer Panel and fix all multi-cinema Firestore routing issues in one update.
+
+Current setup:
+
+* Each cinema has its own Firebase project.
+* Supported projects:
+
+  * Atmosfera
+  * Karavan
+  * Retroville
+* Each project has its own cinema document:
+
+  * Atmosfera -> `Cinema/atmosfera`
+  * Karavan -> `Cinema/karavan`
+  * Retroville -> `Cinema/retroville`
+* Developers are stored separately in the root `Developers` collection and have `userRole: "developer"`.
+
+IMPORTANT: project selection and cinema path selection are two parts of the same context.
+
+Create centralized helpers and make ALL cinema-specific Firestore operations use them:
+
+* `get_active_firestore(telegram_id)`
+* `get_active_cinema_id(telegram_id)`
+* `get_active_cinema_ref(telegram_id)`
+
+Mapping:
+
+* Atmosfera Firebase project -> cinemaId `atmosfera`
+* Karavan Firebase project -> cinemaId `karavan`
+* Retroville Firebase project -> cinemaId `retroville`
+
+Never hardcode `Cinema/atmosfera/...` inside feature handlers.
+
+Fix this everywhere:
+
+* Admin Panel
+* User list
+* User creation/edit/delete/block
+* Role changes
+* Telegram linking
+* Write-offs
+* Write-off recipes
+* Sessions
+* Orders
+* Statistics
+* Light reminders
+* Any other Firestore read/write
+
+When developer selects Retroville, all operations must use:
+
+* Retroville Firebase client
+* `Cinema/retroville/...`
+
+When developer selects Karavan:
+
+* Karavan Firebase client
+* `Cinema/karavan/...`
+
+Never silently fall back to Atmosfera.
+
+Telegram ID:
+
+* When writing `telegramId`, store it as Firestore Double, not Int64.
+* Existing reads must support Double and Int64 for compatibility.
+* User lookup by Telegram ID must work with both numeric types.
+
+Developer Panel:
+The existing `⚙️ Налаштування бота` button must open a panel visible ONLY to `userRole == "developer"`.
+
+The panel controls only the currently selected cinema/project.
+
+Add feature toggles:
+
+* 🎬 Сеанси
+* 🗑 Списання
+* 📦 Замовлення
+* 📊 Статистика
+* 👑 Адмін панель
+* 💡 Нагадування світла
+
+Requirements:
+
+* Toggle each feature ON/OFF.
+* Store feature settings in the currently selected cinema's Firebase project.
+* OFF means hide/disable the feature for normal users/admins only.
+* Do NOT delete handlers or feature code.
+* Developer always has access to every feature even if disabled.
+* Existing role permissions still apply.
+* Developer Panel and `🔄 Змінити кінотеатр` can never be disabled.
+* Menus must be generated dynamically from the selected cinema configuration.
+* Changes must take effect without bot restart.
+* Use reasonable caching and refresh cache after a developer changes a setting.
+* If config does not exist, create defaults matching the bot's current intended menu state.
+
+Add:
+`📋 Інформація про проект`
+
+Show:
+
+* active Firebase project
+* active cinemaId
+* Firebase connection status
+* number of users
+* available schedule dates
+* latest schedule update time if available
+* current feature configuration
+
+Add:
+`🔄 Оновити конфігурацію`
+
+This forces reloading the selected cinema config from Firestore.
+
+Security:
+
+* Check `userRole == "developer"` inside every Developer Panel callback.
+* Do not rely only on hiding buttons.
+* Admin/user accounts must never modify developer settings.
+* Developer must have full access to all current and future features by default.
+
+Also fix the broken Admin Panel and user list in Karavan and Retroville by removing any hardcoded Atmosfera project/path usage.
+
+Add useful logs for major operations:
+
+* selected Firebase project
+* active cinemaId
+* Firestore path being used
+* feature name being toggled
+* Admin Panel/User List path
+
+Do not break normal user/admin behavior.
+
+Return complete updated files, not snippets, and list every changed file.

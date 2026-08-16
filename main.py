@@ -39,6 +39,7 @@ from bot.handlers.sessions import (
 from bot.firebase_client import (
     is_authorized_user,
     get_user_info,
+    is_feature_enabled,
     activate_project_for_user,
 )
 from jobs.light_notifications import check_light_notifications, handle_light_confirm

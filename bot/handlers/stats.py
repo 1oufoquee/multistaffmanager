@@ -1,10 +1,13 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.firebase_client import is_authorized_user, get_statistics
+from bot.firebase_client import is_authorized_user, is_feature_enabled, get_statistics
 
 
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("statistics", telegram_id):
+        await update.message.reply_text("Ця функція вимкнена для цього кінотеатру.")
+        return
     if not is_authorized_user(telegram_id):
         await update.message.reply_text("Доступ заборонено.")
         return

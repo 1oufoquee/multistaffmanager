@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from bot.firebase_client import is_authorized_user, get_orders
+from bot.firebase_client import is_authorized_user, is_feature_enabled, get_orders
 from bot.utils import format_timestamp, format_items, format_seat_id
 
 STATUS_EMOJI = {
@@ -13,6 +13,9 @@ STATUS_EMOJI = {
 
 async def orders_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("orders", telegram_id):
+        await update.message.reply_text("Ця функція вимкнена для цього кінотеатру.")
+        return
     if not is_authorized_user(telegram_id):
         await update.message.reply_text("Доступ заборонено.")
         return

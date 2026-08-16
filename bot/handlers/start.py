@@ -1,8 +1,14 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
-from bot.firebase_client import is_authorized_user, get_user_info, get_developer_info
+from bot.firebase_client import (
+    is_authorized_user,
+    get_user_info,
+    get_developer_info,
+    DEFAULT_FEATURES,
+    is_feature_enabled,
+)
 
-ELEVATED_ROLES = ("admin", "Директор")
+ELEVATED_ROLES = ("admin", "Директор", "developer")
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
@@ -22,22 +28,46 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-DEVELOPER_KEYBOARD = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton("👥 Працівники"), KeyboardButton("🍿 Списання")],
-        [KeyboardButton("🎬 Сеанси"), KeyboardButton("📊 Підсумок списань за сьогодні")],
-        [KeyboardButton("👑 Адмін-Панель"), KeyboardButton("⚙️ Налаштування бота")],
-        [KeyboardButton("🔄 Змінити кінотеатр")],
-    ],
-    resize_keyboard=True,
-)
-
-
 def get_keyboard(info: dict | None) -> ReplyKeyboardMarkup:
     role = (info or {}).get("userRole", "")
-    if role == "developer":
-        return DEVELOPER_KEYBOARD
-    return ADMIN_KEYBOARD if role in ELEVATED_ROLES else MAIN_KEYBOARD
+    developer = role == "developer"
+
+    def enabled(feature: str) -> bool:
+        if developer:
+            return True
+        try:
+            return is_feature_enabled(feature)
+        except LookupError:
+            # The user has no active cinema context (usually an unauthorized
+            # /help request), so retain the safe current default menu.
+            return DEFAULT_FEATURES[feature]
+
+    rows = [[KeyboardButton("👥 Працівники")]]
+    if enabled("writeoffs"):
+        rows[0].append(KeyboardButton("🍿 Списання"))
+
+    feature_row = []
+    if enabled("sessions"):
+        feature_row.append(KeyboardButton("🎬 Сеанси"))
+    if enabled("orders"):
+        feature_row.append(KeyboardButton("📦 Замовлення"))
+    if feature_row:
+        rows.append(feature_row)
+
+    if enabled("statistics"):
+        rows.append([KeyboardButton("📊 Статистика")])
+    rows.append([KeyboardButton("📊 Підсумок списань за сьогодні")])
+
+    if role in ELEVATED_ROLES and enabled("admin_panel"):
+        rows.append([KeyboardButton("👑 Адмін-Панель")])
+
+    if developer:
+        rows.extend([
+            [KeyboardButton("⚙️ Налаштування бота")],
+            [KeyboardButton("🔄 Змінити кінотеатр")],
+        ])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -9,6 +9,7 @@ from bot.firebase_client import (
     get_admin_users, save_writeoff, get_writeoffs_history,
     get_cinema_staff_list, save_active_writeoff, get_active_writeoff,
     update_active_writeoff, delete_active_writeoff,
+    is_feature_enabled, get_active_cinema_id,
 )
 from bot.utils import format_timestamp
 
@@ -336,6 +337,9 @@ async def handle_resume_writeoff(update: Update, context: ContextTypes.DEFAULT_T
     if not is_authorized_user(telegram_id):
         await query.edit_message_text("Доступ заборонено.")
         return ConversationHandler.END
+    if not is_feature_enabled("writeoffs", telegram_id):
+        await query.edit_message_text("Ця функція вимкнена для цього кінотеатру.")
+        return ConversationHandler.END
 
     doc_id = query.data[len("wo_resume_"):]
 
@@ -402,6 +406,9 @@ async def handle_resume_writeoff(update: Update, context: ContextTypes.DEFAULT_T
 
 async def writeoff_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("writeoffs", telegram_id):
+        await update.message.reply_text("Ця функція вимкнена для цього кінотеатру.")
+        return ConversationHandler.END
     if not is_authorized_user(telegram_id):
         await update.message.reply_text("Доступ заборонено.")
         return ConversationHandler.END
@@ -467,7 +474,8 @@ async def _begin_flavor_select(
     if not recipes:
         text = (
             "❌ Рецепти не знайдено у Firebase.\n\n"
-            "Переконайтесь, що колекція Cinema → atmosfera → Recipes містить документи."
+            f"Переконайтесь, що колекція Cinema → {get_active_cinema_id()} → Recipes "
+            "містить документи."
         )
         if use_bot:
             await context.bot.send_message(chat_id=chat_id, text=text)

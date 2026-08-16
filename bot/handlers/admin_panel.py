@@ -8,6 +8,7 @@ from telegram.ext import (
 )
 from bot.firebase_client import (
     is_authorized_user, get_user_info,
+    is_feature_enabled,
     get_menu_items, get_menu_item, search_menu_items,
     create_menu_item, update_menu_item, delete_menu_item,
     get_all_staff, add_staff_user, update_staff_user, delete_staff_user,
@@ -185,6 +186,9 @@ def _staff_text(s: dict) -> str:
 async def ap_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     tid  = update.effective_user.id
     try:
+        if not is_feature_enabled("admin_panel", tid):
+            logger.info("Admin panel disabled for Telegram ID %s", tid)
+            return await _deny(update)
         if not is_authorized_user(tid):
             logger.warning("Admin panel denied: unauthorized Telegram ID %s", tid)
             return await _deny(update)

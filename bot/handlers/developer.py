@@ -5,11 +5,16 @@ from telegram.ext import ContextTypes
 
 from bot.firebase_client import (
     PROJECTS,
+    DEFAULT_FEATURES,
+    FEATURE_LABELS,
     get_developer_info,
-    get_developer_project,
     set_active_project,
     set_developer_project,
     get_user_info,
+    get_feature_config,
+    update_feature_config,
+    refresh_feature_config,
+    get_project_information,
 )
 from bot.handlers.start import get_keyboard
 
@@ -50,6 +55,80 @@ def _settings_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def _panel_keyboard(config: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for feature, label in FEATURE_LABELS.items():
+        state = "✅ Увімк." if config.get(feature, DEFAULT_FEATURES[feature]) else "❌ Вимк."
+        rows.append([
+            InlineKeyboardButton(
+                f"{label}: {state}",
+                callback_data=f"dev_toggle_{feature}",
+            )
+        ])
+    rows.extend([
+        [InlineKeyboardButton("📋 Інформація про проект", callback_data="dev_info")],
+        [InlineKeyboardButton("🔄 Оновити конфігурацію", callback_data="dev_refresh")],
+        [InlineKeyboardButton("🔄 Змінити кінотеатр", callback_data="dev_change")],
+        [InlineKeyboardButton("◀ Назад", callback_data="dev_back")],
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _panel_text(config: dict, project_key: str | None) -> str:
+    label = PROJECTS.get(project_key or "", {}).get("label", "не вибрано")
+    lines = [
+        "⚙️ *Налаштування бота*",
+        "",
+        f"Активний кінотеатр: *{label}*",
+        "",
+        "Натисніть функцію, щоб змінити її стан:",
+    ]
+    for feature, feature_label in FEATURE_LABELS.items():
+        state = "✅ Увімк." if config.get(feature, DEFAULT_FEATURES[feature]) else "❌ Вимк."
+        lines.append(f"{feature_label}: {state}")
+    return "\n".join(lines)
+
+
+def _settings_overview(developer: dict) -> tuple[str, InlineKeyboardMarkup]:
+    selected = developer.get("selectedProject")
+    label = PROJECTS.get(selected or "", {}).get("label", "не вибрано")
+    return (
+        f"⚙️ *Налаштування бота*\n\nАктивний кінотеатр: *{label}*\n"
+        "Оберіть дію:",
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚙️ Панель функцій", callback_data="dev_panel")],
+            [InlineKeyboardButton("📋 Інформація про проект", callback_data="dev_info")],
+            [InlineKeyboardButton("🔄 Оновити конфігурацію", callback_data="dev_refresh")],
+            [InlineKeyboardButton(CHANGE_CINEMA_BUTTON, callback_data="dev_change")],
+        ]),
+    )
+
+
+def _project_info_text(info: dict) -> str:
+    latest = info.get("latest_schedule_update")
+    latest_text = str(latest) if latest is not None else "—"
+    dates = info.get("schedule_dates") or []
+    dates_text = ", ".join(dates[-10:]) if dates else "—"
+    feature_lines = [
+        f"{FEATURE_LABELS[key]}: "
+        f"{'✅ Увімк.' if value else '❌ Вимк.'}"
+        for key, value in info.get("features", {}).items()
+        if key in FEATURE_LABELS
+    ]
+    return (
+        "📋 *Інформація про проект*\n\n"
+        f"Firebase project: `{info['project']}` ({info['project_label']})\n"
+        f"cinemaId: `{info['cinema_id']}`\n"
+        f"Статус Firebase: *{info['connection_status']}*\n"
+        f"Користувачів: *{info['user_count']}*\n"
+        f"Дат розкладу: *{len(dates)}*\n"
+        f"Доступні дати: `{dates_text}`\n"
+        f"Останнє оновлення розкладу: `{latest_text}`\n\n"
+        "*Конфігурація функцій:*\n"
+        + "\n".join(feature_lines)
+    )
+
+
 async def send_developer_landing(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -85,7 +164,7 @@ async def developer_text_handler(
         await update.message.reply_text("⛔ Доступ заборонено.")
         return
 
-    if update.message.text == CHANGE_CINEMA_BUTTON:
+    if update.message.text in {CHANGE_CINEMA_BUTTON, CHOOSE_CINEMA_BUTTON}:
         await update.message.reply_text(
             "🏢 *Виберіть кінотеатр:*",
             parse_mode="Markdown",
@@ -93,13 +172,16 @@ async def developer_text_handler(
         )
         return
 
-    await update.message.reply_text(
-        "⚙️ *Налаштування бота*\n\n"
-        "Функції розробника будуть додані пізніше.\n"
-        "Ви можете змінити активний кінотеатр:",
-        parse_mode="Markdown",
-        reply_markup=_settings_keyboard(),
-    )
+    try:
+        config = get_feature_config(telegram_id)
+        project_key = developer.get("selectedProject")
+        text = _panel_text(config, project_key)
+        keyboard = _panel_keyboard(config)
+    except Exception as exc:
+        logger.exception("Could not load developer panel for %s", telegram_id)
+        text = f"❌ Не вдалося завантажити конфігурацію: {exc}"
+        keyboard = _settings_keyboard()
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
 
 
 async def handle_developer_callback(
@@ -129,15 +211,86 @@ async def handle_developer_callback(
         )
         return
 
+    if data == "dev_panel":
+        try:
+            config = get_feature_config(telegram_id)
+            await query.edit_message_text(
+                _panel_text(config, developer.get("selectedProject")),
+                parse_mode="Markdown",
+                reply_markup=_panel_keyboard(config),
+            )
+        except Exception as exc:
+            logger.exception("Could not open developer panel for %s", telegram_id)
+            await query.edit_message_text(f"❌ Не вдалося завантажити панель: {exc}")
+        return
+
+    if data == "dev_info":
+        try:
+            info = get_project_information(telegram_id)
+            await query.edit_message_text(
+                _project_info_text(info),
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("⚙️ Панель функцій", callback_data="dev_panel")],
+                    [InlineKeyboardButton("🔄 Оновити конфігурацію", callback_data="dev_refresh")],
+                    [InlineKeyboardButton("◀ Назад", callback_data="dev_back")],
+                ]),
+            )
+        except Exception as exc:
+            logger.exception("Could not load project information for %s", telegram_id)
+            await query.edit_message_text(
+                f"❌ Не вдалося завантажити інформацію про проект: {exc}",
+                reply_markup=_settings_keyboard(),
+            )
+        return
+
+    if data == "dev_refresh":
+        try:
+            config = refresh_feature_config(telegram_id)
+            await query.edit_message_text(
+                "✅ Конфігурацію оновлено з Firestore.\n\n"
+                + _panel_text(config, developer.get("selectedProject")),
+                parse_mode="Markdown",
+                reply_markup=_panel_keyboard(config),
+            )
+        except Exception as exc:
+            logger.exception("Could not refresh developer config for %s", telegram_id)
+            await query.edit_message_text(f"❌ Не вдалося оновити конфігурацію: {exc}")
+        return
+
+    toggle_prefix = "dev_toggle_"
+    if data.startswith(toggle_prefix):
+        feature = data[len(toggle_prefix):]
+        if feature not in DEFAULT_FEATURES:
+            await query.answer("Невідома функція.", show_alert=True)
+            return
+        try:
+            current = get_feature_config(telegram_id).get(feature, DEFAULT_FEATURES[feature])
+            config = update_feature_config(telegram_id, feature, not current)
+            await query.edit_message_text(
+                _panel_text(config, developer.get("selectedProject")),
+                parse_mode="Markdown",
+                reply_markup=_panel_keyboard(config),
+            )
+            logger.info(
+                "Developer %s toggled feature %s to %s",
+                telegram_id,
+                feature,
+                not current,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Could not toggle developer feature %s for %s",
+                feature,
+                telegram_id,
+            )
+            await query.edit_message_text(f"❌ Не вдалося змінити функцію: {exc}")
+        return
+
     if data == "dev_back":
         info = get_developer_info(telegram_id) or developer
-        selected = info.get("selectedProject")
-        label = PROJECTS.get(selected, {}).get("label", "не вибрано")
-        await query.edit_message_text(
-            f"⚙️ *Налаштування бота*\n\nАктивний кінотеатр: *{label}*",
-            parse_mode="Markdown",
-            reply_markup=_settings_keyboard(),
-        )
+        text, keyboard = _settings_overview(info)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
         return
 
     prefix = "dev_cinema_"

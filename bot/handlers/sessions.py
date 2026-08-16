@@ -5,7 +5,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from bot.firebase_client import (
-    is_authorized_user, get_user_info, get_schedule, toggle_light_reminders,
+    is_authorized_user, is_feature_enabled, get_user_info, get_schedule,
+    toggle_light_reminders,
 )
 from bot.utils import KYIV_TZ
 
@@ -49,34 +50,43 @@ def _sort_key(session: dict) -> int:
 
 # ── Menu builder ──────────────────────────────────────────────────────────────
 
-def _sessions_menu_keyboard(reminders_on: bool) -> InlineKeyboardMarkup:
+def _sessions_menu_keyboard(
+    reminders_on: bool,
+    light_reminders_enabled: bool = True,
+) -> InlineKeyboardMarkup:
     reminder_label = (
         "💡 Нагадування про світло: ✅ Увімк."
         if reminders_on
         else "💡 Нагадування про світло: ❌ Вимк."
     )
-    return InlineKeyboardMarkup([
+    rows = [
         [InlineKeyboardButton("📅 Сьогоднішні сеанси", callback_data="ses_today")],
         [InlineKeyboardButton("🎯 Найближчий сеанс",   callback_data="ses_nearest")],
-        [InlineKeyboardButton(reminder_label,           callback_data="ses_toggle")],
-    ])
+    ]
+    if light_reminders_enabled:
+        rows.append([InlineKeyboardButton(reminder_label, callback_data="ses_toggle")])
+    return InlineKeyboardMarkup(rows)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def sessions_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("sessions", telegram_id):
+        await update.message.reply_text("Ця функція вимкнена для цього кінотеатру.")
+        return
     if not is_authorized_user(telegram_id):
         await update.message.reply_text("Доступ заборонено.")
         return
 
     info = get_user_info(telegram_id)
     reminders_on = bool((info or {}).get("lightReminders", False))
+    light_enabled = is_feature_enabled("light_reminders", telegram_id)
 
     await update.message.reply_text(
         "🎬 *Сеанси*\n\nОберіть дію:",
         parse_mode="Markdown",
-        reply_markup=_sessions_menu_keyboard(reminders_on),
+        reply_markup=_sessions_menu_keyboard(reminders_on, light_enabled),
     )
 
 
@@ -84,6 +94,9 @@ async def sessions_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def handle_ses_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    if not is_feature_enabled("sessions", update.effective_user.id):
+        await query.answer("Ця функція вимкнена.", show_alert=True)
+        return
     await query.answer()
 
     now = datetime.now(KYIV_TZ)
@@ -143,6 +156,9 @@ async def handle_ses_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def handle_ses_nearest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    if not is_feature_enabled("sessions", update.effective_user.id):
+        await query.answer("Ця функція вимкнена.", show_alert=True)
+        return
     await query.answer()
 
     back_kb = InlineKeyboardMarkup([[
@@ -222,6 +238,9 @@ async def handle_ses_nearest(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_ses_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query       = update.callback_query
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("light_reminders", telegram_id):
+        await query.answer("Нагадування про світло вимкнені.", show_alert=True)
+        return
     await query.answer()
 
     try:
@@ -244,13 +263,17 @@ async def handle_ses_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_ses_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query       = update.callback_query
     telegram_id = update.effective_user.id
+    if not is_feature_enabled("sessions", telegram_id):
+        await query.answer("Ця функція вимкнена.", show_alert=True)
+        return
     await query.answer()
 
     info = get_user_info(telegram_id)
     reminders_on = bool((info or {}).get("lightReminders", False))
+    light_enabled = is_feature_enabled("light_reminders", telegram_id)
 
     await query.edit_message_text(
         "🎬 *Сеанси*\n\nОберіть дію:",
         parse_mode="Markdown",
-        reply_markup=_sessions_menu_keyboard(reminders_on),
+        reply_markup=_sessions_menu_keyboard(reminders_on, light_enabled),
     )

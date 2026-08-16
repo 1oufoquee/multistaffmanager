@@ -6,6 +6,7 @@ from firebase_admin import credentials, firestore
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from contextvars import ContextVar
+import time
 
 _KYIV_TZ = ZoneInfo("Europe/Kyiv")
 logger = logging.getLogger(__name__)
@@ -28,11 +29,34 @@ PROJECTS = {
     },
 }
 
-_active_project: ContextVar[str] = ContextVar(
+_active_project: ContextVar[str | None] = ContextVar(
     "active_firebase_project",
-    default="atmosfera",
+    default=None,
 )
 _db_by_project: dict = {}
+_user_project_cache: dict[int, tuple[float, str | None]] = {}
+_feature_config_cache: dict[str, tuple[float, dict]] = {}
+_CACHE_TTL_SECONDS = 30
+
+DEFAULT_FEATURES = {
+    # Match the current intended normal-user menu: orders and statistics are
+    # hidden, while the other existing staff features are enabled.
+    "sessions": True,
+    "writeoffs": True,
+    "orders": False,
+    "statistics": False,
+    "admin_panel": True,
+    "light_reminders": True,
+}
+
+FEATURE_LABELS = {
+    "sessions": "🎬 Сеанси",
+    "writeoffs": "🗑 Списання",
+    "orders": "📦 Замовлення",
+    "statistics": "📊 Статистика",
+    "admin_panel": "👑 Адмін панель",
+    "light_reminders": "💡 Нагадування світла",
+}
 
 
 def _project_config(project_key: str) -> dict:
@@ -71,26 +95,139 @@ def _get_project_db(project_key: str):
     return db
 
 
+def _project_for_user(telegram_id: int) -> str | None:
+    """Resolve a user's project without ever assuming Atmosfera."""
+    try:
+        telegram_id = int(telegram_id)
+    except (TypeError, ValueError):
+        return None
+
+    developer = get_developer_info(telegram_id)
+    if developer:
+        selected = developer.get("selectedProject")
+        if selected in PROJECTS:
+            return selected
+        return None
+
+    cached = _user_project_cache.get(telegram_id)
+    if cached and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
+        return cached[1]
+
+    found_project = None
+    for project_key in PROJECTS:
+        try:
+            db = _get_project_db(project_key)
+            ref = _cinema_ref_for_project(db, project_key).collection("Users")
+            for doc in ref.get():
+                data = doc.to_dict() or {}
+                try:
+                    if int(data.get("telegramId") or 0) == telegram_id:
+                        found_project = project_key
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if found_project:
+                break
+        except Exception:
+            logger.exception(
+                "Could not search Users for Telegram ID %s in project %s",
+                telegram_id,
+                project_key,
+            )
+
+    _user_project_cache[telegram_id] = (time.monotonic(), found_project)
+    if found_project:
+        logger.info(
+            "Resolved Telegram ID %s to Firebase project %s / cinemaId %s",
+            telegram_id,
+            found_project,
+            PROJECTS[found_project]["cinema_document"],
+        )
+    else:
+        logger.info("No Firebase cinema project found for Telegram ID %s", telegram_id)
+    return found_project
+
+
+def _project_key_for_context(telegram_id: int | None = None) -> str:
+    project_key = (
+        _project_for_user(telegram_id)
+        if telegram_id is not None
+        else _active_project.get()
+    )
+    if project_key not in PROJECTS:
+        raise LookupError(
+            f"No active Firebase project for Telegram ID {telegram_id}"
+        )
+    return project_key
+
+
+def get_active_firestore(telegram_id: int | None = None):
+    """Return the Firestore client selected for this Telegram/cinema context."""
+    project_key = _project_key_for_context(telegram_id)
+    db = _get_project_db(project_key)
+    logger.info(
+        "Using Firebase project %s / cinemaId %s",
+        project_key,
+        PROJECTS[project_key]["cinema_document"],
+    )
+    return db
+
+
+def get_active_cinema_id(telegram_id: int | None = None) -> str:
+    project_key = _project_key_for_context(telegram_id)
+    return PROJECTS[project_key]["cinema_document"]
+
+
+def get_active_cinema_ref(telegram_id: int | None = None):
+    """Return the selected project's Cinema/{cinemaId} document reference."""
+    project_key = _project_key_for_context(telegram_id)
+    db = _get_project_db(project_key)
+    cinema_id = PROJECTS[project_key]["cinema_document"]
+    path = f"Cinema/{cinema_id}"
+    logger.info("Using Firestore path %s in project %s", path, project_key)
+    return db.collection("Cinema").document(cinema_id)
+
+
 def get_db(project_key: str | None = None):
-    """Return the Firestore client selected for the current async update."""
-    return _get_project_db(project_key or _active_project.get())
+    """Backward-compatible alias for the active context client."""
+    return (
+        _get_project_db(project_key)
+        if project_key
+        else get_active_firestore()
+    )
 
 
-def set_active_project(project_key: str) -> None:
+def set_active_project(project_key: str | None) -> None:
     """Select a Firebase project for the current async update context."""
-    _project_config(project_key)
+    if project_key is not None:
+        _project_config(project_key)
     _active_project.set(project_key)
+    if project_key:
+        logger.info(
+            "Selected Firebase project %s / cinemaId %s",
+            project_key,
+            PROJECTS[project_key]["cinema_document"],
+        )
+    else:
+        logger.info("Cleared active Firebase project")
 
 
-def get_active_project() -> str:
+def get_active_project() -> str | None:
     return _active_project.get()
 
 
 # ── Collection refs ──────────────────────────────────────────────────────────
 
-def _cinema_ref(db):
-    project = _project_config(get_active_project())
+def _cinema_ref_for_project(db, project_key: str):
+    project = _project_config(project_key)
+    path = f"Cinema/{project['cinema_document']}"
+    logger.info("Using Firestore path %s in project %s", path, project_key)
     return db.collection("Cinema").document(project["cinema_document"])
+
+
+def _cinema_ref(db):
+    project_key = _project_key_for_context()
+    return _cinema_ref_for_project(db, project_key)
 
 
 def _users_ref(db):
@@ -170,8 +307,8 @@ def activate_project_for_user(telegram_id: int) -> str:
     """
     Select the project for one incoming Telegram update.
 
-    Developers use their persisted selection; all other users remain on the
-    default Atmosfera project.
+    Developers use their persisted selection; normal users are resolved by
+    locating their Telegram ID in the three cinema projects.
     """
     developer = get_developer_info(telegram_id)
     if developer:
@@ -179,14 +316,28 @@ def activate_project_for_user(telegram_id: int) -> str:
         if project in PROJECTS:
             set_active_project(project)
             return project
-    set_active_project("atmosfera")
-    return "atmosfera"
+        set_active_project(None)
+        return ""
+
+    project = _project_for_user(telegram_id)
+    set_active_project(project)
+    return project or ""
 
 
 def _find_user_doc(telegram_id: int):
     """Returns (doc_snapshot, dict) or (None, None). Always fetches fresh."""
-    db = get_db()
-    for doc in _users_ref(db).get():
+    project_key = get_active_project() or _project_for_user(telegram_id)
+    if project_key not in PROJECTS:
+        return None, None
+    if get_active_project() != project_key:
+        set_active_project(project_key)
+    db = get_db(project_key)
+    logger.info(
+        "User lookup path: Cinema/%s/Users for Telegram ID %s",
+        PROJECTS[project_key]["cinema_document"],
+        telegram_id,
+    )
+    for doc in _cinema_ref_for_project(db, project_key).collection("Users").get():
         data = doc.to_dict() or {}
         try:
             if int(data.get("telegramId") or 0) == int(telegram_id):
@@ -217,16 +368,154 @@ def get_user_info(telegram_id: int) -> dict | None:
     if doc is None:
         return None
     data["_id"] = doc.id
+    data.setdefault("cinema", get_active_cinema_id())
+    data["project"] = get_active_project()
     return data
 
 
 def get_user_cinema(telegram_id: int) -> str:
-    """Return the cinema slug for this staff member. Falls back to 'atmosfera'."""
+    """Return the active cinema slug for this staff member."""
     developer = get_developer_info(telegram_id)
     if developer:
-        return developer.get("selectedProject") or "atmosfera"
+        return developer.get("selectedProject") or ""
     info = get_user_info(telegram_id)
-    return (info or {}).get("cinema", "atmosfera")
+    return (info or {}).get("cinema") or get_active_cinema_id(telegram_id)
+
+
+def _feature_ref(project_key: str):
+    db = _get_project_db(project_key)
+    cinema_id = PROJECTS[project_key]["cinema_document"]
+    path = f"Cinema/{cinema_id}/BotConfig/features"
+    logger.info("Using feature configuration path %s in project %s", path, project_key)
+    return (
+        db.collection("Cinema")
+        .document(cinema_id)
+        .collection("BotConfig")
+        .document("features")
+    )
+
+
+def _load_feature_config(project_key: str, force_refresh: bool = False) -> dict:
+    cached = _feature_config_cache.get(project_key)
+    if (
+        not force_refresh
+        and cached
+        and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS
+    ):
+        return dict(cached[1])
+
+    ref = _feature_ref(project_key)
+    snapshot = ref.get()
+    if snapshot.exists:
+        stored = snapshot.to_dict() or {}
+        config = {**DEFAULT_FEATURES, **{
+            key: bool(stored[key])
+            for key in DEFAULT_FEATURES
+            if key in stored
+        }}
+    else:
+        config = dict(DEFAULT_FEATURES)
+        ref.set(config)
+        logger.info(
+            "Created default feature configuration for project %s",
+            project_key,
+        )
+
+    _feature_config_cache[project_key] = (time.monotonic(), config)
+    return dict(config)
+
+
+def get_feature_config(
+    telegram_id: int | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    project_key = _project_key_for_context(telegram_id)
+    return _load_feature_config(project_key, force_refresh=force_refresh)
+
+
+def refresh_feature_config(telegram_id: int | None = None) -> dict:
+    return get_feature_config(telegram_id, force_refresh=True)
+
+
+def is_feature_enabled(feature: str, telegram_id: int | None = None) -> bool:
+    if feature not in DEFAULT_FEATURES:
+        raise ValueError(f"Unknown feature: {feature}")
+    if telegram_id is not None and get_developer_info(telegram_id):
+        return True
+    return bool(get_feature_config(telegram_id).get(feature, DEFAULT_FEATURES[feature]))
+
+
+def update_feature_config(
+    telegram_id: int,
+    feature: str,
+    enabled: bool,
+) -> dict:
+    """Update a feature only for a verified developer's selected project."""
+    developer = get_developer_info(telegram_id)
+    if not developer or developer.get("userRole") != "developer":
+        raise PermissionError("Developer access required")
+    project_key = developer.get("selectedProject")
+    if project_key not in PROJECTS:
+        raise LookupError("Select a cinema before changing feature settings")
+
+    ref = _feature_ref(project_key)
+    config = _load_feature_config(project_key)
+    config[feature] = bool(enabled)
+    ref.set(config, merge=True)
+    _feature_config_cache[project_key] = (time.monotonic(), dict(config))
+    logger.info(
+        "Feature toggled: %s=%s for project %s / cinemaId %s",
+        feature,
+        enabled,
+        project_key,
+        PROJECTS[project_key]["cinema_document"],
+    )
+    return dict(config)
+
+
+def get_project_information(telegram_id: int) -> dict:
+    """Return diagnostic information for the developer's selected project."""
+    developer = get_developer_info(telegram_id)
+    if not developer or developer.get("userRole") != "developer":
+        raise PermissionError("Developer access required")
+    project_key = developer.get("selectedProject")
+    if project_key not in PROJECTS:
+        raise LookupError("Select a cinema before viewing project information")
+
+    db = get_active_firestore(telegram_id)
+    cinema_id = get_active_cinema_id(telegram_id)
+    users_ref = db.collection("Cinema").document(cinema_id).collection("Users")
+    schedules_ref = db.collection("Cinema").document(cinema_id).collection("Schedules")
+    logger.info(
+        "Project info paths: Cinema/%s/Users and Cinema/%s/Schedules",
+        cinema_id,
+        cinema_id,
+    )
+
+    users = users_ref.get()
+    schedule_docs = schedules_ref.get()
+    dates = sorted(doc.id for doc in schedule_docs)
+    latest_update = None
+    for doc in schedule_docs:
+        data = doc.to_dict() or {}
+        candidate = (
+            data.get("updatedAt")
+            or data.get("updated_at")
+            or data.get("lastUpdated")
+        )
+        if candidate and (latest_update is None or str(candidate) > str(latest_update)):
+            latest_update = candidate
+
+    return {
+        "project": project_key,
+        "project_label": PROJECTS[project_key]["label"],
+        "cinema_id": cinema_id,
+        "connection_status": "connected",
+        "user_count": len(users),
+        "schedule_dates": dates,
+        "latest_schedule_update": latest_update,
+        "features": get_feature_config(telegram_id),
+    }
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────
@@ -274,12 +563,17 @@ def get_cinema_staff_list(cinema: str, exclude_tid: int) -> list[dict]:
     excluding *exclude_tid*.  Used to build the transfer-to keyboard.
     """
     db = get_db()
+    active_cinema = get_active_cinema_id()
+    logger.info(
+        "Admin/user list path: Cinema/%s/Users",
+        active_cinema,
+    )
     result = []
     for doc in _users_ref(db).get():
         data = doc.to_dict() or {}
         if data.get("isBlocked"):
             continue
-        user_cinema = data.get("cinema", "atmosfera")
+        user_cinema = data.get("cinema", active_cinema)
         if user_cinema != cinema:
             continue
         tid = data.get("telegramId")
@@ -308,7 +602,7 @@ def get_cinema_staff_tids(cinema: str) -> list[int]:
         data = doc.to_dict() or {}
         if data.get("isBlocked"):
             continue
-        user_cinema = data.get("cinema", "atmosfera")
+        user_cinema = data.get("cinema", get_active_cinema_id())
         if user_cinema != cinema:
             continue
         tid = data.get("telegramId")
@@ -322,12 +616,27 @@ def get_cinema_staff_tids(cinema: str) -> list[int]:
 
 def add_staff_user(data: dict) -> str:
     db = get_db()
+    data = dict(data)
+    if "telegramId" in data:
+        data["telegramId"] = float(data["telegramId"])
+    logger.info(
+        "Creating staff user at Cinema/%s/Users",
+        get_active_cinema_id(),
+    )
     _, doc_ref = _users_ref(db).add(data)
     return doc_ref.id
 
 
 def update_staff_user(doc_id: str, updates: dict) -> None:
     db = get_db()
+    updates = dict(updates)
+    if "telegramId" in updates:
+        updates["telegramId"] = float(updates["telegramId"])
+    logger.info(
+        "Updating staff user at Cinema/%s/Users: %s",
+        get_active_cinema_id(),
+        doc_id,
+    )
     _users_ref(db).document(doc_id).update(updates)
 
 
@@ -407,20 +716,23 @@ def get_schedule(date_str: str) -> dict | None:
 
 def get_light_reminder_users() -> list[int]:
     """Return telegram IDs of all non-blocked users with lightReminders == true."""
+    project_key = _project_key_for_context()
+    feature_config = _load_feature_config(project_key)
     db = get_db()
     result = []
-    for doc in _users_ref(db).get():
-        data = doc.to_dict() or {}
-        if data.get("isBlocked"):
-            continue
-        if not data.get("lightReminders"):
-            continue
-        tid = data.get("telegramId")
-        if tid is not None:
-            try:
-                result.append(int(tid))
-            except (TypeError, ValueError):
-                pass
+    if feature_config.get("light_reminders", True):
+        for doc in _users_ref(db).get():
+            data = doc.to_dict() or {}
+            if data.get("isBlocked"):
+                continue
+            if not data.get("lightReminders"):
+                continue
+            tid = data.get("telegramId")
+            if tid is not None:
+                try:
+                    result.append(int(tid))
+                except (TypeError, ValueError):
+                    pass
 
     # Developers are global accounts, so they may not have a local Users
     # document in the selected cinema project.

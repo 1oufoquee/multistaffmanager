@@ -25,6 +25,9 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from bot.firebase_client import (
+    PROJECTS,
+    set_active_project,
+    get_active_project,
     get_schedule,
     get_light_reminder_users,
     get_light_confirmation,
@@ -145,8 +148,9 @@ async def _send_reminder(
     kb      = None if already_confirmed else _confirm_button(reminder_id, kind)
 
     reminders: dict = context.bot_data.setdefault("reminders", {})
-    if reminder_id not in reminders:
-        reminders[reminder_id] = {"kind": kind, "base_text": base_text, "messages": []}
+    tracking_id = f"{get_active_project()}:{reminder_id}"
+    if tracking_id not in reminders:
+        reminders[tracking_id] = {"kind": kind, "base_text": base_text, "messages": []}
 
     for tid in recipients:
         try:
@@ -156,7 +160,7 @@ async def _send_reminder(
                 parse_mode="Markdown",
                 reply_markup=kb,
             )
-            reminders[reminder_id]["messages"].append((msg.chat.id, msg.message_id))
+            reminders[tracking_id]["messages"].append((msg.chat.id, msg.message_id))
         except Exception as e:
             logger.warning(f"light_notifications: failed to send to {tid}: {e}")
 
@@ -243,7 +247,7 @@ async def handle_light_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # ── Edit ALL tracked messages ─────────────────────────────────────────────
     reminders: dict = context.bot_data.get("reminders", {})
-    entry           = reminders.get(reminder_id)
+    entry           = reminders.get(f"{get_active_project()}:{reminder_id}")
     base_text       = entry["base_text"] if entry else None
     tracked_msgs    = entry["messages"]  if entry else []
 
@@ -300,6 +304,24 @@ async def _edit_one(bot, message, text: str) -> None:
 # ── Main job ──────────────────────────────────────────────────────────────────
 
 async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check schedules independently in every configured cinema project."""
+    for project_key in PROJECTS:
+        try:
+            set_active_project(project_key)
+            await _check_project_light_notifications(context, project_key)
+        except Exception as exc:
+            logger.exception(
+                "light_notifications: project %s failed: %s",
+                project_key,
+                exc,
+            )
+    set_active_project(None)
+
+
+async def _check_project_light_notifications(
+    context: ContextTypes.DEFAULT_TYPE,
+    project_key: str,
+) -> None:
     now      = datetime.now(KYIV_TZ)
     date_str = now.strftime("%Y-%m-%d")
     sent: set = context.bot_data.setdefault("sent_notifications", set())
@@ -336,7 +358,8 @@ async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
         rid_on  = _make_reminder_id(date_str, hall_str, start_raw, "on")
 
         # ── Lights OFF at session start ───────────────────────────────────────
-        if rid_off not in sent:
+        sent_id_off = f"{project_key}:{rid_off}"
+        if sent_id_off not in sent:
             delta = (now - start_dt).total_seconds()
             if 0 <= delta <= WINDOW:
                 base = _build_base_text("off", movie, hall_str, start_str, end_str)
@@ -346,13 +369,14 @@ async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
                     conf = None
                 logger.info(f"light_notifications: OFF → {hall_str} '{movie}' {start_str}")
                 await _send_reminder(context, rid_off, "off", base, conf)
-                sent.add(rid_off)
+                sent.add(sent_id_off)
             elif delta > WINDOW:
-                sent.add(rid_off)   # past — skip silently on restart
+                sent.add(sent_id_off)   # past — skip silently on restart
 
         # ── Lights ON — 7 minutes before session end ──────────────────────────
-        notify_on_dt = end_dt - timedelta(minutes=0)
-        if rid_on not in sent:
+        notify_on_dt = end_dt - timedelta(minutes=7)
+        sent_id_on = f"{project_key}:{rid_on}"
+        if sent_id_on not in sent:
             delta = (now - notify_on_dt).total_seconds()
             if 0 <= delta <= WINDOW:
                 base = _build_base_text("on", movie, hall_str, start_str, end_str)
@@ -362,6 +386,6 @@ async def check_light_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
                     conf = None
                 logger.info(f"light_notifications: ON  → {hall_str} '{movie}' end {end_str}")
                 await _send_reminder(context, rid_on, "on", base, conf)
-                sent.add(rid_on)
+                sent.add(sent_id_on)
             elif delta > WINDOW:
-                sent.add(rid_on)
+                sent.add(sent_id_on)
